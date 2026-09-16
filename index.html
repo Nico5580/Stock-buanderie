@@ -571,13 +571,64 @@ async function sendToServer(payload){
   }
 }
 
+// ---- Write confirmation --------------------------------------------
+// A no-cors POST only tells us the request LEFT the browser — Apps Script
+// gives no CORS headers on POST, so we can't read whether it actually ran
+// server-side. If Google briefly serves an error/transition page (e.g.
+// while a new deployment is being swapped in), the fetch still "succeeds"
+// from the browser's point of view even though nothing was written. To
+// catch that, every write is followed by a real GET (which does have CORS
+// headers, so the response is readable) to confirm the server's data now
+// matches what we sent — and retried automatically if it doesn't.
+const VERIFY_DELAY_MS = 1100;
+const MAX_VERIFY_ATTEMPTS = 3; // includes the first send
+
+// name -> increasing counter. Lets an update/delete abandon its own
+// verification if a *newer* write for the same product started in the
+// meantime, so a slow retry can never overwrite a more recent value.
+let writeGeneration = {};
+
+async function verifyWrite(payload){
+  const products = await apiGet();
+  if(!products) return null; // couldn't check right now — not a confirmed failure
+  const found = products.find(p => p.name === payload.name);
+  if(payload.action === "delete") return !found;
+  if(payload.action === "update"){
+    if(!found) return false;
+    const wantTarget = (payload.target === null || payload.target === undefined || payload.target === "") ? null : Number(payload.target);
+    const gotTarget = (found.target === null || found.target === undefined) ? null : Number(found.target);
+    return Number(found.base) === Number(payload.base) && gotTarget === wantTarget;
+  }
+  return true;
+}
+
+async function sendAndVerify(payload, isStillCurrent){
+  const stillCurrent = () => !isStillCurrent || isStillCurrent();
+  for(let attempt = 0; attempt < MAX_VERIFY_ATTEMPTS; attempt++){
+    if(!stillCurrent()) return true; // a newer write took over — nothing left to confirm here
+    const sent = await sendToServer(payload);
+    if(!sent) return false; // real connectivity loss — queue it, no point verifying yet
+    await new Promise(r => setTimeout(r, VERIFY_DELAY_MS));
+    if(!stillCurrent()) return true;
+    const confirmed = await verifyWrite(payload);
+    if(confirmed === true) return true;
+    if(confirmed === null) return true; // couldn't check — trust the send rather than loop forever
+    // confirmed === false: genuine mismatch, loop and resend
+  }
+  return false;
+}
+
 async function apiUpdate(name, base, target){
   if(!apiUrl) return;
   const payload = {action:"update", name, base, target, user:getUsername()};
-  const sent = await sendToServer(payload);
-  if(!sent){
+  const myGen = (writeGeneration[name] = (writeGeneration[name] || 0) + 1);
+  const isStillCurrent = () => writeGeneration[name] === myGen;
+  const ok = await sendAndVerify(payload, isStillCurrent);
+  if(!ok && isStillCurrent()){
     queueWrite(payload);
-    showToast("Hors-ligne : sera envoyé à la reconnexion");
+    showToast(navigator.onLine
+      ? `"${name}" : le serveur n'a pas confirmé — nouvelle tentative en cours`
+      : "Hors-ligne : sera envoyé à la reconnexion");
   }
 }
 
@@ -585,13 +636,18 @@ async function apiDelete(name){
   if(!apiUrl) return;
   pendingDeletes.add(name);
   const payload = {action:"delete", name, user:getUsername()};
-  const sent = await sendToServer(payload);
-  if(sent){
+  const myGen = (writeGeneration[name] = (writeGeneration[name] || 0) + 1);
+  const isStillCurrent = () => writeGeneration[name] === myGen;
+  const ok = await sendAndVerify(payload, isStillCurrent);
+  if(ok){
     pendingDeletes.delete(name);
-  } else {
+  } else if(isStillCurrent()){
     queueWrite(payload);
-    // stays in pendingDeletes until the queued retry succeeds, so a poll
-    // in the meantime can't resurrect the product we just deleted
+    showToast(navigator.onLine
+      ? `Suppression de "${name}" non confirmée — nouvelle tentative en cours`
+      : "Hors-ligne : la suppression sera envoyée à la reconnexion");
+    // stays in pendingDeletes until the queued retry is confirmed, so a
+    // poll in the meantime can't resurrect the product we just deleted
   }
 }
 
@@ -600,8 +656,8 @@ async function flushQueue(){
   const hadItems = writeQueue.length;
   const remaining = [];
   for(const payload of writeQueue){
-    const sent = await sendToServer(payload);
-    if(sent){
+    const ok = await sendAndVerify(payload);
+    if(ok){
       if(payload.action === "delete") pendingDeletes.delete(payload.name);
     } else {
       remaining.push(payload);
@@ -610,7 +666,7 @@ async function flushQueue(){
   writeQueue = remaining;
   saveQueue();
   if(remaining.length === 0 && hadItems > 0){
-    showToast("Modifications en attente envoyées");
+    showToast("Modifications en attente envoyées et confirmées");
     render();
   } else if(remaining.length < hadItems){
     render();
