@@ -67,6 +67,13 @@
   .restant-badge.low{background:#f7e6e0; color:var(--warn);}
   .restant-badge.zero{background:#f2dcd4; color:var(--warn);}
 
+  .del-btn{
+    background:none; border:none; color:#b9a99f; font-size:15px;
+    width:22px; height:22px; display:flex; align-items:center; justify-content:center;
+    border-radius:999px; flex-shrink:0;
+  }
+  .del-btn:active{background:#f2dcd4; color:var(--warn);}
+
   .row2{display:flex; align-items:center; justify-content:space-between; margin-top:11px; gap:10px;}
 
   .stepper{display:flex; align-items:center; gap:0; border:1px solid var(--line); border-radius:9px; overflow:hidden;}
@@ -212,6 +219,7 @@
     <button class="order-btn" id="openOrder">
       Commande <span class="badge-count" id="orderCount">0</span>
     </button>
+    <button class="sync-btn" id="openAdd" title="Ajouter un produit">➕</button>
     <button class="sync-btn" id="openSync" title="Synchronisation">⚙️</button>
   </div>
   <input class="search" id="search" placeholder="Rechercher un produit…" autocomplete="off">
@@ -428,6 +436,17 @@ async function apiUpdate(name, base, target){
   }catch(e){ showToast("Hors-ligne : sauvegardé localement"); }
 }
 
+async function apiDelete(name){
+  if(!apiUrl) return;
+  try{
+    await fetch(apiUrl, {
+      method:"POST",
+      mode:"no-cors",
+      body: JSON.stringify({action:"delete", name})
+    });
+  }catch(e){ /* ignore */ }
+}
+
 async function apiSeed(list){
   if(!apiUrl) return;
   try{
@@ -587,7 +606,10 @@ function render(){
     <div class="card" data-id="${p.id}">
       <div class="row1">
         <div class="name">${p.name}</div>
-        <div class="${badgeClass}">${restant}</div>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <div class="${badgeClass}">${restant}</div>
+          <button class="del-btn" title="Supprimer ce produit">✕</button>
+        </div>
       </div>
       <div class="row2">
         <div style="display:flex; align-items:center;">
@@ -651,8 +673,53 @@ function render(){
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
     });
+    card.querySelector(".del-btn").addEventListener("click", async () => {
+      const ok = await customConfirm(`Supprimer "${p.name}" ?`, `Cette action est définitive.`);
+      if(!ok) return;
+      products = products.filter(x => x.id !== p.id);
+      saveData(true);
+      apiDelete(p.name);
+      render();
+      renderOrderBadge();
+      showToast("Produit supprimé");
+    });
   });
 }
+
+function openAddModal(){
+  const backdrop = document.getElementById("modalBackdrop");
+  const box = document.getElementById("modalBox");
+  box.innerHTML = `
+    <p>Ajouter un produit</p>
+    <div class="modal-sub">Nom du produit</div>
+    <input type="text" id="mNewName" placeholder="Ex : Lessive poudre 5kg">
+    <div class="modal-sub">Stock initial</div>
+    <input type="number" inputmode="numeric" id="mNewStock" value="0">
+    <div class="modal-actions">
+      <button class="modal-cancel" id="mAddCancel">Annuler</button>
+      <button class="modal-confirm" id="mAddOk">Ajouter</button>
+    </div>`;
+  backdrop.classList.add("show");
+  document.getElementById("mAddCancel").onclick = () => backdrop.classList.remove("show");
+  document.getElementById("mAddOk").onclick = () => {
+    const name = document.getElementById("mNewName").value.trim();
+    const stock = parseInt(document.getElementById("mNewStock").value, 10);
+    if(!name){ showToast("Nom requis"); return; }
+    if(products.find(p => p.name.toLowerCase() === name.toLowerCase())){
+      showToast("Ce produit existe déjà");
+      return;
+    }
+    const p = { id: makeId(name, products.length), name, base: isNaN(stock) ? 0 : Math.max(0, stock), target: null };
+    products.push(p);
+    saveData(true);
+    apiUpdate(p.name, p.base, p.target);
+    backdrop.classList.remove("show");
+    render();
+    renderOrderBadge();
+    showToast("Produit ajouté");
+  };
+}
+document.getElementById("openAdd").addEventListener("click", openAddModal);
 
 function updateCard(card, p){
   const restant = restantOf(p);
