@@ -485,9 +485,32 @@ function openSyncModal(){
     <div class="modal-actions">
       <button class="modal-cancel" id="mCancel">Annuler</button>
       <button class="modal-confirm" id="mOk">Enregistrer</button>
+    </div>
+    <div class="modal-actions" style="margin-top:8px;">
+      <button class="modal-cancel" id="mForceSync" style="width:100%;">Forcer synchro complète (renvoyer les ${products.length} produits)</button>
     </div>`;
   backdrop.classList.add("show");
   document.getElementById("mCancel").onclick = () => backdrop.classList.remove("show");
+  document.getElementById("mForceSync").onclick = async () => {
+    const val = document.getElementById("mUrlInput").value.trim();
+    if(!val){ showToast("Renseigne d'abord une URL"); return; }
+    apiUrl = val;
+    localStorage.setItem(API_URL_KEY, apiUrl);
+    showToast("Envoi en cours…");
+    await apiSeed(products.map(p => ({name:p.name, base:p.base, target:p.target})));
+    const serverProducts = await apiGet();
+    if(serverProducts){
+      mergeServerData(serverProducts);
+      saveData(true);
+      showToast("Tous les produits envoyés");
+    } else {
+      showToast("Échec de l'envoi — vérifie l'URL");
+    }
+    backdrop.classList.remove("show");
+    render();
+    renderOrderBadge();
+    startPolling();
+  };
   document.getElementById("mOk").onclick = async () => {
     const val = document.getElementById("mUrlInput").value.trim();
     apiUrl = val;
