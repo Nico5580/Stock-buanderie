@@ -57,7 +57,14 @@
     border-radius:11px; padding:12px 13px; margin-bottom:9px;
   }
   .row1{display:flex; justify-content:space-between; align-items:flex-start; gap:8px;}
-  .name{font-size:14.5px; font-weight:600; line-height:1.28; flex:1;}
+  .name-wrap{display:flex; align-items:center; gap:10px; flex:1; min-width:0;}
+  .product-icon{
+    flex-shrink:0; width:38px; height:38px; border-radius:10px;
+    background:#eef1ee; color:var(--accent);
+    display:flex; align-items:center; justify-content:center;
+  }
+  .product-icon svg{width:21px; height:21px;}
+  .name{font-size:14.5px; font-weight:600; line-height:1.28; flex:1; min-width:0;}
 
   .restant-badge{
     font-family:var(--mono); font-size:15px; font-weight:700;
@@ -117,7 +124,7 @@
     border-radius:999px; opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
     z-index:50;
   }
-  .toast.show{opacity:0.95; transform:translateX(-50%) translateY(0);}
+  .toast.show{opacity:0.95; transform:translateX(-50%) translateY(0); pointer-events:auto;}
 
   .top-actions{display:flex; justify-content:flex-end; margin-bottom:10px; gap:8px; align-items:center;}
   .sync-btn{
@@ -220,6 +227,8 @@
       Commande <span class="badge-count" id="orderCount">0</span>
     </button>
     <button class="sync-btn" id="openAdd" title="Ajouter un produit">➕</button>
+    <button class="sync-btn" id="openHistory" title="Historique">🕘</button>
+    <button class="sync-btn" id="openUser" title="Ton nom">👤</button>
     <button class="sync-btn" id="openSync" title="Synchronisation">⚙️</button>
   </div>
   <input class="search" id="search" placeholder="Rechercher un produit…" autocomplete="off">
@@ -247,13 +256,44 @@
   </div>
 </div>
 
+<div class="sheet-backdrop" id="historyBackdrop"></div>
+<div class="sheet" id="historySheet">
+  <div class="sheet-header">
+    <h2>Historique des modifications</h2>
+    <button class="sheet-close" id="closeHistory">&times;</button>
+  </div>
+  <div class="sheet-body" id="historyList"></div>
+</div>
+
 <div id="printArea"></div>
 
 <script>
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
-let apiUrl = localStorage.getItem(API_URL_KEY) || "";
+const USER_KEY = "stock-buanderie-user";
+
+// URL du script Apps Script déployé — configurée d'office, pas besoin de la
+// coller manuellement. localStorage prend le dessus si un ⚙️ l'a changée.
+const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbzlFz9i6IgHJmlnMyslbBv-PjX0PK3YUeiZn-H-na1jDsnl8f04iM1-h5YJipg4fbKv/exec";
+
+// Liste fermée des utilisateurs — pas de saisie libre, évite les fautes de
+// frappe et les noms fantaisistes dans l'historique.
+const USERS_LIST = ["Nicolas", "Anna", "Francesco", "Andy", "Dorothy"];
+// Ces utilisateurs peuvent ajouter/supprimer des produits sans code admin.
+const STRUCTURE_USERS = ["Nicolas", "Anna"];
+// Code admin — protège les réglages de synchro (et la structure pour tout
+// le monde en dehors de STRUCTURE_USERS). Ceci est une protection légère
+// côté interface : le code est visible dans le code source de la page
+// (repo public), ça dissuade les erreurs/changements accidentels mais
+// n'empêche pas quelqu'un de lire le fichier pour le contourner.
+const ADMIN_PIN = "1282";
+
+let apiUrl = localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL;
 let syncPollTimer = null;
+
+function getUsername(){
+  return localStorage.getItem(USER_KEY) || "";
+}
 
 const defaultProducts = [
 ["ALCODES PLUS 5L", 7],
@@ -316,6 +356,56 @@ let searchTerm = "";
 
 function makeId(name, i){
   return "p" + i + "-" + name.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40);
+}
+
+// ---- Product icons ----------------------------------------------------
+// No brand photos (copyrighted, and hotlinked images break) — a small set
+// of clean line-art category icons, picked automatically from the product
+// name. Consistent look, works offline, never a broken image.
+const PRODUCT_ICONS = {
+  bottle: `<path d="M9.5 9.5h5v10.5a1.5 1.5 0 0 1-1.5 1.5h-2a1.5 1.5 0 0 1-1.5-1.5V9.5Z"/><rect x="10.5" y="5.5" width="3" height="4"/><rect x="9.8" y="3.5" width="4.4" height="2.2" rx="0.6"/>`,
+  jerrycan: `<rect x="5" y="8.5" width="14" height="12" rx="2"/><rect x="9" y="4.5" width="6" height="4" rx="1"/><path d="M9 6.5H6.5a1 1 0 0 0-1 1V8.5M15 6.5h2.5a1 1 0 0 1 1 1V8.5"/><line x1="7.5" y1="13.5" x2="16.5" y2="13.5"/>`,
+  box: `<path d="M4 8.5 12 5l8 3.5M4 8.5v10.5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V8.5M4 8.5 12 12M12 12l8-3.5M12 12v8"/>`,
+  sponge: `<rect x="4" y="8" width="16" height="9" rx="3.5"/><circle cx="9" cy="12.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="14.5" cy="13.8" r="0.9" fill="currentColor" stroke="none"/><circle cx="16.5" cy="10.8" r="0.9" fill="currentColor" stroke="none"/>`,
+  gloves: `<path d="M7.5 21v-9.5a1.7 1.7 0 0 1 3.4 0v2.3M10.9 12.6V6.3a1.6 1.6 0 0 1 3.2 0v6.2M14.1 12.2V5.6a1.6 1.6 0 0 1 3.2 0v7.3M17.3 12.3V8.2a1.5 1.5 0 0 1 3 0v6.9a5.2 5.2 0 0 1-5.2 5.2h-4.6a2.5 2.5 0 0 1-2.5-2.5v-2.3"/>`,
+  paperroll: `<ellipse cx="12" cy="6.2" rx="6" ry="2.7"/><path d="M6 6.2v10a6 2.7 0 0 0 12 0v-10"/><ellipse cx="12" cy="6.2" rx="2.1" ry="0.9" fill="currentColor" stroke="none"/>`,
+  wipes: `<rect x="4.5" y="6.5" width="15" height="13" rx="2"/><path d="M9.3 6.5c0-1.3 1.1-2.3 2.7-2.3s2.7 1 2.7 2.3" fill="none"/><path d="M10.5 6.5 12 9.8l-1.3 2 1.3 3.2"/>`,
+  vacuumbag: `<path d="M8.3 3.5h7.4l2 6.2H6.3l2-6.2Z"/><path d="M6.3 9.7h11.4l-1.4 9.3a2 2 0 0 1-2 1.7H9.7a2 2 0 0 1-2-1.7L6.3 9.7Z"/>`,
+  trashbag: `<path d="M6.2 6.5h11.6l-1.1 12.3a2 2 0 0 1-2 1.8h-5.4a2 2 0 0 1-2-1.8L6.2 6.5Z"/><path d="M9.3 6.5V4.3h5.4v2.2"/><path d="M6.6 6.5l3 3.2M17.4 6.5l-3 3.2" opacity="0.55"/>`,
+  broom: `<line x1="16.5" y1="4" x2="9.5" y2="11"/><path d="M9.5 11 5 20.5M9.5 11l-0.3 9.5M9.5 11l4.8 9.5" opacity="0.85"/>`,
+  tablet: `<rect x="6" y="8.5" width="12" height="9" rx="4"/><circle cx="12" cy="13" r="2.1" fill="currentColor" stroke="none" opacity="0.45"/>`,
+  spray: `<rect x="8.3" y="9" width="7.4" height="11.5" rx="2.6"/><rect x="10" y="5.5" width="4" height="3.5" rx="1"/><path d="M4.5 10 6.7 11M4.5 14 6.7 13.3M19.5 10 17.3 11M19.5 14 17.3 13.3" opacity="0.6"/>`,
+};
+
+const CATEGORY_RULES = [
+  [/gant/, "gloves"],
+  [/eponge/, "sponge"],
+  [/sac.*poubelle|poubelle/, "trashbag"],
+  [/sac.*aspirateur|aspirateur/, "vacuumbag"],
+  [/lingette|voile/, "wipes"],
+  [/papier|chamoix/, "paperroll"],
+  [/desodorisant|sanet|riem|prodiflore/, "spray"],
+  [/tabs|tablette|sel|bicarbonate|neutraligel/, "tablet"],
+  [/tete.*loup/, "broom"],
+  [/5l|3l|55l|4d.*1l|mado clean|deminerali/, "jerrycan"],
+];
+
+function normalize(s){
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+}
+
+function categoryFor(name){
+  const n = normalize(name);
+  for(const [re, cat] of CATEGORY_RULES){
+    if(re.test(n)) return cat;
+  }
+  return "bottle";
+}
+
+function productIconSvg(name){
+  const cat = categoryFor(name);
+  const path = PRODUCT_ICONS[cat] || PRODUCT_ICONS.bottle;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`;
 }
 
 async function loadData(){
@@ -423,29 +513,105 @@ async function apiGet(){
   return null;
 }
 
-async function apiUpdate(name, base, target){
-  if(!apiUrl) return;
+async function apiGetLog(limit){
+  if(!apiUrl) return null;
   try{
-    // no-cors: Apps Script doesn't send CORS headers on POST responses,
-    // so we fire the write without trying to read the (opaque) response.
+    const sep = apiUrl.includes("?") ? "&" : "?";
+    const res = await fetch(apiUrl + sep + "action=log&limit=" + (limit || 200), {method:"GET"});
+    const data = await res.json();
+    if(data && data.ok) return data.log;
+  }catch(e){ /* ignore */ }
+  return null;
+}
+
+// ---- Write queue: retries update/delete requests that failed to even
+// leave the browser (offline). A no-cors write to a reachable server never
+// throws (opaque response), so a thrown error here means real connectivity
+// loss — those are the ones worth queuing and retrying automatically. ----
+const QUEUE_KEY = "stock-buanderie-queue";
+function loadQueue(){
+  try{ return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; }catch(e){ return []; }
+}
+function saveQueue(){
+  try{ localStorage.setItem(QUEUE_KEY, JSON.stringify(writeQueue)); }catch(e){}
+}
+let writeQueue = loadQueue();
+
+function queueWrite(payload){
+  writeQueue.push(payload);
+  saveQueue();
+  render(); // refresh the "en attente" badge in the status line right away
+}
+
+// Names deleted locally but not yet confirmed sent to the server — kept out
+// of mergeServerData so a reload right after deleting can't resurrect them.
+let pendingDeletes = new Set();
+
+async function sendToServer(payload){
+  if(!apiUrl) return false;
+  try{
+    // no-cors: Apps Script doesn't send CORS headers on POST responses, so
+    // we fire the write without trying to read the (opaque) response.
+    // keepalive: lets the request finish in the background even if the
+    // page reloads/closes right after (fetch would otherwise be aborted).
     await fetch(apiUrl, {
       method:"POST",
       mode:"no-cors",
-      body: JSON.stringify({action:"update", name, base, target})
+      keepalive:true,
+      body: JSON.stringify(payload)
     });
-  }catch(e){ showToast("Hors-ligne : sauvegardé localement"); }
+    return true;
+  }catch(e){
+    return false;
+  }
+}
+
+async function apiUpdate(name, base, target){
+  if(!apiUrl) return;
+  const payload = {action:"update", name, base, target, user:getUsername()};
+  const sent = await sendToServer(payload);
+  if(!sent){
+    queueWrite(payload);
+    showToast("Hors-ligne : sera envoyé à la reconnexion");
+  }
 }
 
 async function apiDelete(name){
   if(!apiUrl) return;
-  try{
-    await fetch(apiUrl, {
-      method:"POST",
-      mode:"no-cors",
-      body: JSON.stringify({action:"delete", name})
-    });
-  }catch(e){ /* ignore */ }
+  pendingDeletes.add(name);
+  const payload = {action:"delete", name, user:getUsername()};
+  const sent = await sendToServer(payload);
+  if(sent){
+    pendingDeletes.delete(name);
+  } else {
+    queueWrite(payload);
+    // stays in pendingDeletes until the queued retry succeeds, so a poll
+    // in the meantime can't resurrect the product we just deleted
+  }
 }
+
+async function flushQueue(){
+  if(writeQueue.length === 0 || !apiUrl) return;
+  const hadItems = writeQueue.length;
+  const remaining = [];
+  for(const payload of writeQueue){
+    const sent = await sendToServer(payload);
+    if(sent){
+      if(payload.action === "delete") pendingDeletes.delete(payload.name);
+    } else {
+      remaining.push(payload);
+    }
+  }
+  writeQueue = remaining;
+  saveQueue();
+  if(remaining.length === 0 && hadItems > 0){
+    showToast("Modifications en attente envoyées");
+    render();
+  } else if(remaining.length < hadItems){
+    render();
+  }
+}
+window.addEventListener("online", flushQueue);
 
 async function apiSeed(list){
   if(!apiUrl) return;
@@ -453,6 +619,7 @@ async function apiSeed(list){
     await fetch(apiUrl, {
       method:"POST",
       mode:"no-cors",
+      keepalive:true,
       body: JSON.stringify({action:"seed", products: list})
     });
   }catch(e){ /* ignore */ }
@@ -470,7 +637,10 @@ function mergeServerData(serverProducts){
     }
   });
   // add any product that exists on the server but not locally
+  // (skip ones we just asked the server to delete — avoids resurrecting
+  // a product if the delete request is still in flight)
   serverProducts.forEach(sp => {
+    if(pendingDeletes.has(sp.name)) return;
     if(!products.find(p => p.name === sp.name)){
       products.push({
         id: makeId(sp.name, products.length),
@@ -490,8 +660,25 @@ function startPolling(){
       saveData(true);
       render();
       renderOrderBadge();
+      flushQueue();
     }
-  }, 8000);
+  }, 3000);
+}
+
+function exportCsv(){
+  const rows = [["nom", "stock", "cible"]].concat(
+    products.map(p => [p.name, p.base, p.target === null ? "" : p.target])
+  );
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }); // BOM for Excel
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "stock-buanderie-" + new Date().toISOString().slice(0, 10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function openSyncModal(){
@@ -507,9 +694,16 @@ function openSyncModal(){
     </div>
     <div class="modal-actions" style="margin-top:8px;">
       <button class="modal-cancel" id="mForceSync" style="width:100%;">Forcer synchro complète (renvoyer les ${products.length} produits)</button>
+    </div>
+    <div class="modal-actions" style="margin-top:8px;">
+      <button class="modal-cancel" id="mExportCsv" style="width:100%;">Exporter en CSV (sauvegarde locale)</button>
     </div>`;
   backdrop.classList.add("show");
   document.getElementById("mCancel").onclick = () => backdrop.classList.remove("show");
+  document.getElementById("mExportCsv").onclick = () => {
+    exportCsv();
+    backdrop.classList.remove("show");
+  };
   document.getElementById("mForceSync").onclick = async () => {
     const val = document.getElementById("mUrlInput").value.trim();
     if(!val){ showToast("Renseigne d'abord une URL"); return; }
@@ -529,6 +723,7 @@ function openSyncModal(){
     render();
     renderOrderBadge();
     startPolling();
+    if(apiUrl && !getUsername()) openUserModal();
   };
   document.getElementById("mOk").onclick = async () => {
     const val = document.getElementById("mUrlInput").value.trim();
@@ -552,10 +747,113 @@ function openSyncModal(){
     render();
     renderOrderBadge();
     startPolling();
+    if(apiUrl && !getUsername()) openUserModal();
   };
 }
 
-document.getElementById("openSync").addEventListener("click", openSyncModal);
+// ---- Admin / access control -------------------------------------------
+async function requireAdmin(){
+  const v = await customPrompt("Code admin", "");
+  if(v === null) return false;
+  if(String(v).trim() === ADMIN_PIN) return true;
+  showToast("Code incorrect");
+  return false;
+}
+
+function canManageStructure(){
+  return STRUCTURE_USERS.includes(getUsername());
+}
+
+async function requireStructureAccess(){
+  if(canManageStructure()) return true;
+  return await requireAdmin();
+}
+
+document.getElementById("openSync").addEventListener("click", async () => {
+  if(await requireAdmin()) openSyncModal();
+});
+
+// ---- User identification (fixed list, locked once chosen) -------------
+function openUserPicker(){
+  const backdrop = document.getElementById("modalBackdrop");
+  const box = document.getElementById("modalBox");
+  box.innerHTML = `
+    <p>Qui es-tu ?</p>
+    <div class="modal-sub">Ton nom sera associé à tes modifications dans l'historique.</div>
+    <div class="modal-actions" style="flex-direction:column; gap:8px;">
+      ${USERS_LIST.map(u => `<button class="modal-cancel" style="width:100%;" data-user="${u}">${u}</button>`).join("")}
+    </div>`;
+  backdrop.classList.add("show");
+  box.querySelectorAll("[data-user]").forEach(btn => {
+    btn.onclick = () => {
+      const u = btn.getAttribute("data-user");
+      localStorage.setItem(USER_KEY, u);
+      backdrop.classList.remove("show");
+      showToast(`Bonjour ${u}`);
+    };
+  });
+  backdrop.onclick = (e) => { if(e.target === backdrop) backdrop.classList.remove("show"); };
+}
+
+async function openUserModal(){
+  const current = getUsername();
+  if(!current){
+    openUserPicker();
+    return;
+  }
+  // name already set on this device — changing it requires the admin code
+  if(await requireAdmin()){
+    openUserPicker();
+  } else {
+    showToast(`Tu es identifié comme ${current}`);
+  }
+}
+document.getElementById("openUser").addEventListener("click", openUserModal);
+
+const actionLabels = { ajout: "Ajouté", maj: "Modifié", suppression: "Supprimé" };
+
+async function openHistorySheet(){
+  document.getElementById("historyBackdrop").classList.add("show");
+  document.getElementById("historySheet").classList.add("show");
+  const listEl = document.getElementById("historyList");
+  if(!apiUrl){
+    listEl.innerHTML = `<div class="sheet-empty">L'historique n'existe qu'en mode synchronisé (configure l'URL dans ⚙️).</div>`;
+    return;
+  }
+  listEl.innerHTML = `<div class="sheet-empty">Chargement…</div>`;
+  const log = await apiGetLog(200);
+  if(!log){
+    listEl.innerHTML = `<div class="sheet-empty">Impossible de charger l'historique — vérifie que le script backend a bien été redéployé.</div>`;
+    return;
+  }
+  if(log.length === 0){
+    listEl.innerHTML = `<div class="sheet-empty">Aucune modification enregistrée pour l'instant.</div>`;
+    return;
+  }
+  listEl.innerHTML = log.map(entry => {
+    const d = new Date(entry.timestamp);
+    const when = isNaN(d) ? entry.timestamp : d.toLocaleString("fr-BE", {day:"2-digit", month:"2-digit", year:"2-digit", hour:"2-digit", minute:"2-digit"});
+    const label = actionLabels[entry.action] || entry.action;
+    const qty = entry.action === "suppression"
+      ? ""
+      : ` · stock ${entry.base}${entry.target !== null && entry.target !== undefined ? ` (cible ${entry.target})` : ""}`;
+    return `
+      <div class="order-item" style="flex-direction:column; align-items:flex-start; gap:3px; padding:10px 0;">
+        <div style="display:flex; justify-content:space-between; width:100%; font-size:11.5px; color:#8a9497;">
+          <span>${when}</span>
+          <span>${entry.user || "Inconnu"}</span>
+        </div>
+        <div style="font-size:13.5px;">${label} — ${entry.name}${qty}</div>
+      </div>`;
+  }).join("");
+}
+function closeHistorySheet(){
+  document.getElementById("historyBackdrop").classList.remove("show");
+  document.getElementById("historySheet").classList.remove("show");
+}
+document.getElementById("openHistory").addEventListener("click", openHistorySheet);
+document.getElementById("closeHistory").addEventListener("click", closeHistorySheet);
+document.getElementById("historyBackdrop").addEventListener("click", closeHistorySheet);
 
 function showToast(msg){
   const t = document.getElementById("toast");
@@ -565,11 +863,26 @@ function showToast(msg){
   t._hideTimer = setTimeout(()=> t.classList.remove("show"), 1100);
 }
 
+const UNDO_WINDOW_MS = 8000;
+
+function showActionToast(msg, actionLabel, onAction, duration){
+  const t = document.getElementById("toast");
+  t.innerHTML = `<span>${msg}</span> <button id="toastAction" style="margin-left:10px; background:none; border:none; color:#fff; text-decoration:underline; font-weight:600; font-size:12.5px; padding:0;">${actionLabel}</button>`;
+  t.classList.add("show");
+  clearTimeout(t._hideTimer);
+  document.getElementById("toastAction").onclick = () => {
+    t.classList.remove("show");
+    clearTimeout(t._hideTimer);
+    onAction();
+  };
+  t._hideTimer = setTimeout(()=> t.classList.remove("show"), duration || UNDO_WINDOW_MS);
+}
+
 function render(){
   const list = document.getElementById("list");
   const sub = document.getElementById("subline");
 
-  let visible = products.filter(p => p.name.toLowerCase().includes(searchTerm));
+  let visible = products.filter(p => normalize(p.name).includes(searchTerm));
   if(currentFilter === "low"){
     visible = visible.filter(p => restantOf(p) <= 2);
   } else if(currentFilter === "order"){
@@ -581,7 +894,10 @@ function render(){
   const status = apiUrl
     ? `<span class="sync-status on">● Synchronisé</span>`
     : `<span class="sync-status">○ Mode local</span>`;
-  sub.innerHTML = `${products.length} produits · ${visible.length} affichés &nbsp;${status}`;
+  const queueBadge = writeQueue.length > 0
+    ? ` <span class="sync-status" style="color:var(--warn);">⏳ ${writeQueue.length} en attente</span>`
+    : "";
+  sub.innerHTML = `${products.length} produits · ${visible.length} affichés &nbsp;${status}${queueBadge}`;
 
   if(visible.length === 0){
     list.innerHTML = `<div class="empty">Aucun produit ne correspond</div>`;
@@ -605,7 +921,10 @@ function render(){
     return `
     <div class="card" data-id="${p.id}">
       <div class="row1">
-        <div class="name">${p.name}</div>
+        <div class="name-wrap">
+          <div class="product-icon">${productIconSvg(p.name)}</div>
+          <div class="name">${p.name}</div>
+        </div>
         <div style="display:flex; align-items:center; gap:6px;">
           <div class="${badgeClass}">${restant}</div>
           <button class="del-btn" title="Supprimer ce produit">✕</button>
@@ -674,14 +993,33 @@ function render(){
       apiUpdate(p.name, p.base, p.target);
     });
     card.querySelector(".del-btn").addEventListener("click", async () => {
-      const ok = await customConfirm(`Supprimer "${p.name}" ?`, `Cette action est définitive.`);
+      if(!(await requireStructureAccess())) return;
+      const ok = await customConfirm(`Supprimer "${p.name}" ?`, `Cette action est définitive après ${UNDO_WINDOW_MS/1000}s (tu peux annuler juste après).`);
       if(!ok) return;
+
+      const snapshot = { ...p };
+      const restoreIndex = products.findIndex(x => x.id === p.id);
       products = products.filter(x => x.id !== p.id);
+      pendingDeletes.add(snapshot.name); // block resurrection during the undo window too
       saveData(true);
-      apiDelete(p.name);
       render();
       renderOrderBadge();
-      showToast("Produit supprimé");
+
+      let undone = false;
+      const timer = setTimeout(() => {
+        if(!undone) apiDelete(snapshot.name);
+      }, UNDO_WINDOW_MS);
+
+      showActionToast(`"${snapshot.name}" supprimé`, "Annuler", () => {
+        undone = true;
+        clearTimeout(timer);
+        pendingDeletes.delete(snapshot.name);
+        const idx = Math.min(restoreIndex, products.length);
+        products.splice(idx, 0, snapshot);
+        saveData(true);
+        render();
+        renderOrderBadge();
+      });
     });
   });
 }
@@ -719,7 +1057,9 @@ function openAddModal(){
     showToast("Produit ajouté");
   };
 }
-document.getElementById("openAdd").addEventListener("click", openAddModal);
+document.getElementById("openAdd").addEventListener("click", async () => {
+  if(await requireStructureAccess()) openAddModal();
+});
 
 function updateCard(card, p){
   const restant = restantOf(p);
@@ -747,7 +1087,7 @@ function updateCard(card, p){
 }
 
 document.getElementById("search").addEventListener("input", (e) => {
-  searchTerm = e.target.value.toLowerCase();
+  searchTerm = normalize(e.target.value);
   render();
 });
 
@@ -841,9 +1181,13 @@ document.getElementById("mailOrder").addEventListener("click", () => {
       saveData(true);
       render();
       renderOrderBadge();
+      flushQueue();
     }
   }
   startPolling();
+  if(apiUrl && !getUsername()){
+    openUserModal();
+  }
 })();
 </script>
 
