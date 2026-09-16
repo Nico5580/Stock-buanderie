@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Stock Buanderie</title>
+<style>
+  :root{
+    --ink:#1c2b33;
+    --paper:#f2efe9;
+    --card:#ffffff;
+    --line:#dcd6c9;
+    --accent:#2f5d5a;
+    --accent-dim:#7fa19e;
+    --warn:#a8492f;
+    --ok:#3c7a5c;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  html,body{margin:0; padding:0; background:var(--paper); color:var(--ink);
+    font-family:-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing:antialiased;}
+  body{padding-bottom:40px;}
+
+  header{
+    position:sticky; top:0; z-index:10;
+    background:var(--paper);
+    padding:18px 16px 10px;
+    border-bottom:1px solid var(--line);
+  }
+  h1{
+    font-size:19px; font-weight:700; margin:0 0 2px;
+    letter-spacing:-0.01em;
+  }
+  .sub{font-size:12.5px; color:#5b6a70; margin-bottom:12px;}
+
+  .search{
+    width:100%; padding:10px 12px; border-radius:9px;
+    border:1px solid var(--line); background:var(--card);
+    font-size:15px; color:var(--ink); outline:none;
+  }
+  .search:focus{border-color:var(--accent);}
+
+  .filters{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;}
+  .chip{
+    font-size:12px; padding:5px 10px; border-radius:999px;
+    border:1px solid var(--line); background:var(--card); color:#5b6a70;
+  }
+  .chip.active{background:var(--accent); color:#fff; border-color:var(--accent);}
+
+  main{padding:10px 12px 0;}
+
+  .card{
+    background:var(--card); border:1px solid var(--line);
+    border-radius:11px; padding:12px 13px; margin-bottom:9px;
+  }
+  .row1{display:flex; justify-content:space-between; align-items:flex-start; gap:8px;}
+  .name{font-size:14.5px; font-weight:600; line-height:1.28; flex:1;}
+
+  .restant-badge{
+    font-family:var(--mono); font-size:15px; font-weight:700;
+    padding:3px 9px; border-radius:7px; white-space:nowrap;
+    background:#eef1ee; color:var(--ink);
+  }
+  .restant-badge.low{background:#f7e6e0; color:var(--warn);}
+  .restant-badge.zero{background:#f2dcd4; color:var(--warn);}
+
+  .row2{display:flex; align-items:center; justify-content:space-between; margin-top:11px; gap:10px;}
+
+  .stepper{display:flex; align-items:center; gap:0; border:1px solid var(--line); border-radius:9px; overflow:hidden;}
+  .stepper button{
+    width:38px; height:34px; border:none; background:var(--card);
+    font-size:18px; color:var(--accent); font-weight:600;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .stepper button:active{background:#eaf0ee;}
+  .stepper .count{
+    min-width:34px; text-align:center; font-family:var(--mono);
+    font-size:14px; border-left:1px solid var(--line); border-right:1px solid var(--line);
+    padding:0 4px; height:34px; line-height:34px; background:#fafaf7;
+    cursor:pointer;
+  }
+  .stepper-label{font-size:10.5px; color:#8a9497; letter-spacing:0.01em; margin-right:6px;}
+
+  .target-wrap{display:flex; align-items:center; gap:6px;}
+  .target-wrap label{font-size:10.5px; color:#8a9497;}
+  .target-wrap input{
+    width:44px; text-align:center; font-family:var(--mono); font-size:13px;
+    padding:6px 2px; border:1px solid var(--line); border-radius:7px; background:#fafaf7; color:var(--ink);
+  }
+
+  .order-line{
+    margin-top:8px; font-size:12px; color:var(--accent);
+    display:flex; justify-content:space-between; border-top:1px dashed var(--line); padding-top:7px;
+  }
+  .order-line b{font-family:var(--mono); font-size:13px;}
+  .order-line.zero{color:#9aa39f;}
+
+  .empty{text-align:center; color:#8a9497; font-size:13px; padding:40px 20px;}
+
+  footer{
+    padding:16px; text-align:center; font-size:11px; color:#9aa39f;
+  }
+
+  .toast{
+    position:fixed; bottom:18px; left:50%; transform:translateX(-50%) translateY(10px);
+    background:var(--ink); color:#fff; font-size:12.5px; padding:8px 16px;
+    border-radius:999px; opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
+    z-index:50;
+  }
+  .toast.show{opacity:0.95; transform:translateX(-50%) translateY(0);}
+
+  .top-actions{display:flex; justify-content:flex-end; margin-bottom:10px; gap:8px; align-items:center;}
+  .sync-btn{
+    background:var(--card); border:1px solid var(--line); border-radius:999px;
+    width:34px; height:34px; font-size:15px; display:flex; align-items:center; justify-content:center;
+  }
+  .sync-status{font-size:11px; color:#8a9497; margin-left:6px;}
+  .sync-status.on{color:var(--ok);}
+  .order-btn{
+    display:flex; align-items:center; gap:6px;
+    background:var(--accent); color:#fff; border:none;
+    padding:8px 14px; border-radius:999px; font-size:13px; font-weight:600;
+  }
+  .order-btn .badge-count{
+    background:rgba(255,255,255,0.25); border-radius:999px;
+    font-family:var(--mono); font-size:11.5px; padding:1px 7px;
+  }
+
+  .sheet-backdrop{
+    position:fixed; inset:0; background:rgba(20,25,25,0.4);
+    display:none; z-index:40;
+  }
+  .sheet-backdrop.show{display:block;}
+  .sheet{
+    position:fixed; left:0; right:0; bottom:0; z-index:41;
+    background:var(--paper); border-radius:16px 16px 0 0;
+    max-height:82vh; display:flex; flex-direction:column;
+    transform:translateY(100%); transition:transform .22s ease;
+  }
+  .sheet.show{transform:translateY(0);}
+  .sheet-header{
+    padding:14px 16px 10px; border-bottom:1px solid var(--line);
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .sheet-header h2{font-size:16.5px; margin:0;}
+  .sheet-close{border:none; background:none; font-size:22px; color:#8a9497; line-height:1;}
+  .sheet-body{overflow-y:auto; padding:6px 16px 10px;}
+  .order-item{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:9px 0; border-bottom:1px solid var(--line); font-size:14px;
+  }
+  .order-item:last-child{border-bottom:none;}
+  .order-item b{font-family:var(--mono); color:var(--accent);}
+  .sheet-actions{
+    display:flex; gap:8px; padding:12px 16px calc(16px + env(safe-area-inset-bottom));
+    border-top:1px solid var(--line); background:var(--paper);
+  }
+  .sheet-actions button{
+    flex:1; padding:12px; border-radius:10px; font-size:14px; font-weight:600; border:none;
+  }
+  .btn-print{background:#e7e3d8; color:var(--ink);}
+  .btn-mail{background:var(--accent); color:#fff;}
+  .sheet-empty{padding:30px 4px; text-align:center; color:#8a9497; font-size:13px;}
+
+  #printArea{display:none;}
+
+  @media print{
+    body *{visibility:hidden;}
+    #printArea, #printArea *{visibility:visible;}
+    #printArea{
+      display:block; position:absolute; top:0; left:0; right:0; padding:20px;
+    }
+    .sheet-actions{display:none;}
+  }
+
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(20,25,25,0.45);
+    display:none; align-items:center; justify-content:center; z-index:60; padding:20px;
+  }
+  .modal-backdrop.show{display:flex;}
+  .modal-box{
+    background:var(--card); border-radius:14px; padding:18px;
+    width:100%; max-width:300px;
+  }
+  .modal-box p{font-size:14.5px; line-height:1.4; margin:0 0 6px;}
+  .modal-box .modal-sub{font-size:12.5px; color:#5b6a70; margin-bottom:14px;}
+  .modal-box input{
+    width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:8px;
+    font-size:15px; margin-bottom:14px; font-family:var(--mono);
+  }
+  .modal-actions{display:flex; gap:8px;}
+  .modal-actions button{
+    flex:1; padding:11px; border-radius:9px; font-size:14px; font-weight:600; border:none;
+  }
+  .modal-cancel{background:#eee9dc; color:var(--ink);}
+  .modal-confirm{background:var(--accent); color:#fff;}
+</style>
+</head>
+<body>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal-box" id="modalBox"></div>
+</div>
+
+<header>
+  <h1>Stock Buanderie</h1>
+  <div class="sub" id="subline">Chargement…</div>
+  <div class="top-actions">
+    <button class="order-btn" id="openOrder">
+      Commande <span class="badge-count" id="orderCount">0</span>
+    </button>
+    <button class="sync-btn" id="openSync" title="Synchronisation">⚙️</button>
+  </div>
+  <input class="search" id="search" placeholder="Rechercher un produit…" autocomplete="off">
+  <div class="filters">
+    <button class="chip active" data-filter="all">Tous</button>
+    <button class="chip" data-filter="low">Restant ≤ 2</button>
+    <button class="chip" data-filter="order">À commander</button>
+  </div>
+</header>
+
+<main id="list"></main>
+<footer>Les modifications sont enregistrées automatiquement sur cet appareil</footer>
+<div class="toast" id="toast"></div>
+
+<div class="sheet-backdrop" id="sheetBackdrop"></div>
+<div class="sheet" id="orderSheet">
+  <div class="sheet-header">
+    <h2>Liste à commander</h2>
+    <button class="sheet-close" id="closeOrder">&times;</button>
+  </div>
+  <div class="sheet-body" id="orderList"></div>
+  <div class="sheet-actions">
+    <button class="btn-print" id="printOrder">Imprimer</button>
+    <button class="btn-mail" id="mailOrder">Envoyer par mail</button>
+  </div>
+</div>
+
+<div id="printArea"></div>
+
+<script>
+const STORAGE_KEY = "stock-buanderie-v1";
+const API_URL_KEY = "stock-buanderie-apiurl";
+let apiUrl = localStorage.getItem(API_URL_KEY) || "";
+let syncPollTimer = null;
+
+const defaultProducts = [
+["ALCODES PLUS 5L", 7],
+["Antikal 750 ml", 2],
+["Bicarbonate de soude 1kg", 1],
+["Cif crème 500 ml", 7],
+["Cif crème 750 ml", 6],
+["Clip désodorisant FRESH PRODUCTS", 10],
+["Désodorisant Riem 300 ml", 0],
+["Désodorisant surodorant PRODIFLORE x250ml", 9],
+["Détartrant wc échoclean", 18],
+["Détergent 4D POLTECH 1L", 3],
+["Détergent 4D POLTECH 5L", 2],
+["Détergent dégraissant sol 5L", 5],
+["Détergent pour le sol Pol Green Odor", 8],
+["Détergent vaisselle MADO CLEAN x5L", 0],
+["Eau déminéralisée 5L - COUTURE", 23],
+["Eponges à récurer MULTY x3", 29],
+["Eponges à récurer STARBRIGHT x4", 0],
+["Eponges à tableau", 4],
+["ESPRIT SEL - 55L", 2],
+["Gants latex M x100", 4],
+["Gants latex X x100 XL", 2],
+["Glorix 1L ou HARPIC", 6],
+["Lessive ALLWASH 3L", 1],
+["Lingettes imprégnées low lint TORK x200", 2],
+["Neutraligels", 12],
+["Papier main Peakserve TORK (100585) 12x410", 0],
+["Papier main rouleaux LUCART x6", 7],
+["Papier WC jumbo LUCART x6 rlx", 0],
+["Produit rinçage lave-vaisselle SUN 1L", 1],
+["Produit rinçage lave-vaisselle TANA 1L", 2],
+["Rouleaux papiers chamoix", 13],
+["Sacs aspirateur FLOOAPUL rox014", 15],
+["Sacs aspirateur NUMATIC nvm-1ah", 3],
+["Sacs Poubelle 10-12L x20 sacs BRABANTIA", 3],
+["Sacs Poubelle 10-12L x40 sacs BRABANTIA", 2],
+["Sacs Poubelles 45x50 x50 sacs", 1],
+["Sacs Poubelles 45x60 x50 sacs", 4],
+["Sacs Poubelles 60x90 x20 sacs", 5],
+["Sacs Poubelles 60x90 x25 sacs", 6],
+["Sacs Poubelles 70x80 x20 sacs", 91],
+["Sacs Poubelles 90x125 x10 sacs", 31],
+["Sanet spray 750 ml", 0],
+["Savon main 5L SOPROMODE", 4],
+["Savon main ISABEL x750ml", 4],
+["Savon Tork 1000ml pour distributeur", 0],
+["Sun Sel 2 Kg", 2],
+["Sun Tabs x85", 4],
+["Surfglass - Pol Green neutral Pomme 5L", 5],
+["Têtes de loups", 1],
+["Tork toilet seat cleaner", 13],
+["Vinaigre blanc 1.5L", 8],
+["Voiles imprégnés x100", 1],
+];
+
+let products = [];
+let currentFilter = "all";
+let searchTerm = "";
+
+function makeId(name, i){
+  return "p" + i + "-" + name.toLowerCase().replace(/[^a-z0-9]+/g,"-").slice(0,40);
+}
+
+async function loadData(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if(raw){
+      products = JSON.parse(raw);
+      // migrate old data model (base + entrées/sorties counters) to a single mutable stock value
+      let migrated = false;
+      products.forEach(p => {
+        if((p.entrees||0) !== 0 || (p.sorties||0) !== 0){
+          p.base = p.base + (p.entrees||0) - (p.sorties||0);
+          p.entrees = 0;
+          p.sorties = 0;
+          migrated = true;
+        }
+      });
+      if(migrated) saveData(true);
+      return;
+    }
+  }catch(e){ /* no saved data yet, or storage unavailable */ }
+  products = defaultProducts.map(([name, base], i) => ({
+    id: makeId(name, i),
+    name,
+    base,
+    target: null
+  }));
+  saveData(true);
+}
+
+let saveTimer = null;
+function saveData(silent){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(products));
+    if(!silent) showToast("Enregistré");
+  }catch(e){
+    showToast("Erreur d'enregistrement");
+  }
+}
+function saveDataDebounced(){
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => saveData(true), 300);
+}
+
+// Custom confirm/prompt — window.confirm()/prompt() are silently blocked by iOS
+// when the page runs in standalone (Add to Home Screen) mode.
+function customConfirm(message, sub){
+  return new Promise(resolve => {
+    const backdrop = document.getElementById("modalBackdrop");
+    const box = document.getElementById("modalBox");
+    box.innerHTML = `
+      <p>${message}</p>
+      ${sub ? `<div class="modal-sub">${sub}</div>` : ""}
+      <div class="modal-actions">
+        <button class="modal-cancel" id="mCancel">Annuler</button>
+        <button class="modal-confirm" id="mOk">Confirmer</button>
+      </div>`;
+    backdrop.classList.add("show");
+    const cleanup = (result) => {
+      backdrop.classList.remove("show");
+      resolve(result);
+    };
+    document.getElementById("mCancel").onclick = () => cleanup(false);
+    document.getElementById("mOk").onclick = () => cleanup(true);
+    backdrop.onclick = (e) => { if(e.target === backdrop) cleanup(false); };
+  });
+}
+
+function customPrompt(message, defaultValue){
+  return new Promise(resolve => {
+    const backdrop = document.getElementById("modalBackdrop");
+    const box = document.getElementById("modalBox");
+    box.innerHTML = `
+      <p>${message}</p>
+      <input type="number" inputmode="numeric" id="mInput" value="${defaultValue}">
+      <div class="modal-actions">
+        <button class="modal-cancel" id="mCancel">Annuler</button>
+        <button class="modal-confirm" id="mOk">OK</button>
+      </div>`;
+    backdrop.classList.add("show");
+    const input = document.getElementById("mInput");
+    input.focus();
+    input.select();
+    const cleanup = (result) => {
+      backdrop.classList.remove("show");
+      resolve(result);
+    };
+    document.getElementById("mCancel").onclick = () => cleanup(null);
+    document.getElementById("mOk").onclick = () => cleanup(input.value);
+    backdrop.onclick = (e) => { if(e.target === backdrop) cleanup(null); };
+  });
+}
+
+function restantOf(p){
+  return p.base;
+}
+
+async function apiGet(){
+  if(!apiUrl) return null;
+  try{
+    const res = await fetch(apiUrl, {method:"GET"});
+    const data = await res.json();
+    if(data && data.ok) return data.products;
+  }catch(e){ /* offline or misconfigured — silently fall back */ }
+  return null;
+}
+
+async function apiUpdate(name, base, target){
+  if(!apiUrl) return;
+  try{
+    // no-cors: Apps Script doesn't send CORS headers on POST responses,
+    // so we fire the write without trying to read the (opaque) response.
+    await fetch(apiUrl, {
+      method:"POST",
+      mode:"no-cors",
+      body: JSON.stringify({action:"update", name, base, target})
+    });
+  }catch(e){ showToast("Hors-ligne : sauvegardé localement"); }
+}
+
+async function apiSeed(list){
+  if(!apiUrl) return;
+  try{
+    await fetch(apiUrl, {
+      method:"POST",
+      mode:"no-cors",
+      body: JSON.stringify({action:"seed", products: list})
+    });
+  }catch(e){ /* ignore */ }
+}
+
+function mergeServerData(serverProducts){
+  if(!serverProducts) return;
+  const byName = {};
+  serverProducts.forEach(sp => byName[sp.name] = sp);
+  products.forEach(p => {
+    const sp = byName[p.name];
+    if(sp){
+      p.base = sp.base;
+      p.target = sp.target;
+    }
+  });
+  // add any product that exists on the server but not locally
+  serverProducts.forEach(sp => {
+    if(!products.find(p => p.name === sp.name)){
+      products.push({
+        id: makeId(sp.name, products.length),
+        name: sp.name, base: sp.base, target: sp.target
+      });
+    }
+  });
+}
+
+function startPolling(){
+  clearInterval(syncPollTimer);
+  if(!apiUrl) return;
+  syncPollTimer = setInterval(async () => {
+    const serverProducts = await apiGet();
+    if(serverProducts){
+      mergeServerData(serverProducts);
+      saveData(true);
+      render();
+      renderOrderBadge();
+    }
+  }, 8000);
+}
+
+function openSyncModal(){
+  const backdrop = document.getElementById("modalBackdrop");
+  const box = document.getElementById("modalBox");
+  box.innerHTML = `
+    <p>Synchronisation partagée</p>
+    <div class="modal-sub">Colle ici l'URL de ton Google Apps Script (se terminant par /exec). Laisse vide pour rester en mode local.</div>
+    <input type="text" id="mUrlInput" placeholder="https://script.google.com/macros/s/.../exec" value="${apiUrl}" style="font-family:var(--mono); font-size:12px;">
+    <div class="modal-actions">
+      <button class="modal-cancel" id="mCancel">Annuler</button>
+      <button class="modal-confirm" id="mOk">Enregistrer</button>
+    </div>`;
+  backdrop.classList.add("show");
+  document.getElementById("mCancel").onclick = () => backdrop.classList.remove("show");
+  document.getElementById("mOk").onclick = async () => {
+    const val = document.getElementById("mUrlInput").value.trim();
+    apiUrl = val;
+    localStorage.setItem(API_URL_KEY, apiUrl);
+    backdrop.classList.remove("show");
+    if(apiUrl){
+      showToast("Connexion…");
+      await apiSeed(products.map(p => ({name:p.name, base:p.base, target:p.target})));
+      const serverProducts = await apiGet();
+      if(serverProducts){
+        mergeServerData(serverProducts);
+        saveData(true);
+        showToast("Synchronisation activée");
+      } else {
+        showToast("Impossible de joindre le script — vérifie l'URL");
+      }
+    } else {
+      showToast("Mode local");
+    }
+    render();
+    renderOrderBadge();
+    startPolling();
+  };
+}
+
+document.getElementById("openSync").addEventListener("click", openSyncModal);
+
+function showToast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._hideTimer);
+  t._hideTimer = setTimeout(()=> t.classList.remove("show"), 1100);
+}
+
+function render(){
+  const list = document.getElementById("list");
+  const sub = document.getElementById("subline");
+
+  let visible = products.filter(p => p.name.toLowerCase().includes(searchTerm));
+  if(currentFilter === "low"){
+    visible = visible.filter(p => restantOf(p) <= 2);
+  } else if(currentFilter === "order"){
+    visible = visible.filter(p => p.target !== null && p.target !== "" && (p.target - restantOf(p)) > 0);
+  }
+
+  visible = visible.slice().sort((a, b) => a.name.localeCompare(b.name, "fr", {sensitivity: "base"}));
+
+  const status = apiUrl
+    ? `<span class="sync-status on">● Synchronisé</span>`
+    : `<span class="sync-status">○ Mode local</span>`;
+  sub.innerHTML = `${products.length} produits · ${visible.length} affichés &nbsp;${status}`;
+
+  if(visible.length === 0){
+    list.innerHTML = `<div class="empty">Aucun produit ne correspond</div>`;
+    return;
+  }
+
+  list.innerHTML = visible.map(p => {
+    const restant = restantOf(p);
+    let badgeClass = "restant-badge";
+    if(restant <= 0) badgeClass += " zero";
+    else if(restant <= 2) badgeClass += " low";
+
+    let orderLine = "";
+    if(p.target !== null && p.target !== "" && !isNaN(p.target)){
+      const toOrder = p.target - restant;
+      orderLine = `<div class="order-line ${toOrder<=0 ? 'zero':''}">
+        <span>À commander</span><b>${toOrder > 0 ? toOrder : 0}</b>
+      </div>`;
+    }
+
+    return `
+    <div class="card" data-id="${p.id}">
+      <div class="row1">
+        <div class="name">${p.name}</div>
+        <div class="${badgeClass}">${restant}</div>
+      </div>
+      <div class="row2">
+        <div style="display:flex; align-items:center;">
+          <span class="stepper-label">Stock</span>
+          <div class="stepper">
+            <button class="minus" aria-label="moins">−</button>
+            <span class="count restant-count">${restant}</span>
+            <button class="plus" aria-label="plus">+</button>
+          </div>
+        </div>
+        <div class="target-wrap">
+          <label>Cible</label>
+          <input type="number" inputmode="numeric" class="target-input" value="${p.target === null ? '' : p.target}" placeholder="—">
+        </div>
+      </div>
+      ${orderLine}
+    </div>`;
+  }).join("");
+
+  // wire events
+  list.querySelectorAll(".card").forEach(card => {
+    const id = card.getAttribute("data-id");
+    const p = products.find(x => x.id === id);
+
+    card.querySelector(".plus").addEventListener("click", async () => {
+      const ok = await customConfirm(`Ajouter 1 à "${p.name}" ?`, `Stock actuel : ${p.base}`);
+      if(!ok) return;
+      p.base += 1;
+      updateCard(card, p);
+      saveDataDebounced();
+      renderOrderBadge();
+      apiUpdate(p.name, p.base, p.target);
+    });
+    card.querySelector(".minus").addEventListener("click", async () => {
+      if(p.base <= 0) return;
+      const ok = await customConfirm(`Retirer 1 à "${p.name}" ?`, `Stock actuel : ${p.base}`);
+      if(!ok) return;
+      p.base = Math.max(0, p.base - 1);
+      updateCard(card, p);
+      saveDataDebounced();
+      renderOrderBadge();
+      apiUpdate(p.name, p.base, p.target);
+    });
+    card.querySelector(".restant-count").addEventListener("click", async () => {
+      const v = await customPrompt(`Nouveau stock pour "${p.name}"`, p.base);
+      if(v === null) return;
+      const n = parseInt(v, 10);
+      if(!isNaN(n) && n >= 0){
+        p.base = n;
+        updateCard(card, p);
+        saveDataDebounced();
+        renderOrderBadge();
+        apiUpdate(p.name, p.base, p.target);
+      }
+    });
+    card.querySelector(".target-input").addEventListener("change", (e) => {
+      const v = e.target.value;
+      p.target = v === "" ? null : Number(v);
+      updateCard(card, p);
+      saveDataDebounced();
+      renderOrderBadge();
+      apiUpdate(p.name, p.base, p.target);
+    });
+  });
+}
+
+function updateCard(card, p){
+  const restant = restantOf(p);
+  card.querySelector(".restant-count").textContent = restant;
+  const badge = card.querySelector(".restant-badge");
+  badge.textContent = restant;
+  badge.className = "restant-badge" + (restant<=0 ? " zero" : restant<=2 ? " low" : "");
+
+  let orderLine = card.querySelector(".order-line");
+  if(p.target !== null && p.target !== "" && !isNaN(p.target)){
+    const toOrder = p.target - restant;
+    const html = `<span>À commander</span><b>${toOrder > 0 ? toOrder : 0}</b>`;
+    if(orderLine){
+      orderLine.className = "order-line" + (toOrder<=0 ? " zero" : "");
+      orderLine.innerHTML = html;
+    } else {
+      orderLine = document.createElement("div");
+      orderLine.className = "order-line" + (toOrder<=0 ? " zero" : "");
+      orderLine.innerHTML = html;
+      card.appendChild(orderLine);
+    }
+  } else if(orderLine){
+    orderLine.remove();
+  }
+}
+
+document.getElementById("search").addEventListener("input", (e) => {
+  searchTerm = e.target.value.toLowerCase();
+  render();
+});
+
+document.querySelectorAll(".chip").forEach(chip => {
+  chip.addEventListener("click", () => {
+    document.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
+    chip.classList.add("active");
+    currentFilter = chip.getAttribute("data-filter");
+    render();
+  });
+});
+
+function getOrderItems(){
+  return products
+    .map(p => ({ name: p.name, toOrder: (p.target !== null && p.target !== "" && !isNaN(p.target)) ? (p.target - restantOf(p)) : 0 }))
+    .filter(x => x.toOrder > 0);
+}
+
+function renderOrderBadge(){
+  document.getElementById("orderCount").textContent = getOrderItems().length;
+}
+
+function renderOrderSheet(){
+  const items = getOrderItems();
+  const listEl = document.getElementById("orderList");
+  if(items.length === 0){
+    listEl.innerHTML = `<div class="sheet-empty">Rien à commander pour l'instant.<br>Renseigne un "Stock cible" sur les produits pour suivre les manques.</div>`;
+  } else {
+    listEl.innerHTML = items.map(it => `
+      <div class="order-item"><span>${it.name}</span><b>${it.toOrder}</b></div>
+    `).join("");
+  }
+
+  // printable version
+  const today = new Date().toLocaleDateString("fr-BE");
+  document.getElementById("printArea").innerHTML = `
+    <h2 style="font-family:sans-serif;">Commande stock buanderie — ${today}</h2>
+    ${items.length === 0 ? "<p>Rien à commander.</p>" : `
+    <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:14px;">
+      <thead><tr>
+        <th style="text-align:left; border-bottom:2px solid #333; padding:6px 4px;">Produit</th>
+        <th style="text-align:right; border-bottom:2px solid #333; padding:6px 4px;">Quantité</th>
+      </tr></thead>
+      <tbody>
+        ${items.map(it => `<tr>
+          <td style="padding:6px 4px; border-bottom:1px solid #ccc;">${it.name}</td>
+          <td style="padding:6px 4px; border-bottom:1px solid #ccc; text-align:right;">${it.toOrder}</td>
+        </tr>`).join("")}
+      </tbody>
+    </table>`}
+  `;
+}
+
+function openOrderSheet(){
+  renderOrderSheet();
+  document.getElementById("sheetBackdrop").classList.add("show");
+  document.getElementById("orderSheet").classList.add("show");
+}
+function closeOrderSheet(){
+  document.getElementById("sheetBackdrop").classList.remove("show");
+  document.getElementById("orderSheet").classList.remove("show");
+}
+
+document.getElementById("openOrder").addEventListener("click", openOrderSheet);
+document.getElementById("closeOrder").addEventListener("click", closeOrderSheet);
+document.getElementById("sheetBackdrop").addEventListener("click", closeOrderSheet);
+
+document.getElementById("printOrder").addEventListener("click", () => {
+  window.print();
+});
+
+document.getElementById("mailOrder").addEventListener("click", () => {
+  const items = getOrderItems();
+  const today = new Date().toLocaleDateString("fr-BE");
+  const subject = `Commande stock buanderie - ${today}`;
+  let body = items.length === 0
+    ? "Rien à commander pour l'instant."
+    : items.map(it => `- ${it.name} : ${it.toOrder}`).join("\n");
+  const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href = mailto;
+});
+
+(async function init(){
+  await loadData();
+  render();
+  renderOrderBadge();
+  if(apiUrl){
+    const serverProducts = await apiGet();
+    if(serverProducts){
+      mergeServerData(serverProducts);
+      saveData(true);
+      render();
+      renderOrderBadge();
+    }
+  }
+  startPolling();
+})();
+</script>
+
+</body>
+</html>
