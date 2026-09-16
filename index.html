@@ -281,6 +281,11 @@ const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbzlFz9i6IgHJmln
 const USERS_LIST = ["Nicolas", "Anna", "Francesco", "Andy", "Dorothy"];
 // Ces utilisateurs peuvent ajouter/supprimer des produits sans code admin.
 const STRUCTURE_USERS = ["Nicolas", "Anna"];
+// Seuls ces utilisateurs voient le bouton Historique — pour les autres il
+// est complètement masqué (pas juste verrouillé), donc son existence même
+// n'est pas visible. Rappel : c'est masqué côté interface, pas un vrai
+// secret — visible dans le code source pour qui irait le lire.
+const HISTORY_USERS = ["Nicolas", "Anna"];
 // Code admin — protège les réglages de synchro (et la structure pour tout
 // le monde en dehors de STRUCTURE_USERS). Ceci est une protection légère
 // côté interface : le code est visible dans le code source de la page
@@ -774,6 +779,17 @@ document.getElementById("openSync").addEventListener("click", async () => {
 });
 
 // ---- User identification (fixed list, locked once chosen) -------------
+
+// Le bouton Historique n'est même pas affiché pour les utilisateurs hors
+// HISTORY_USERS : ils ne doivent pas savoir que la fonctionnalité existe
+// (pas juste verrouillée par code). Rappel : masquage côté interface
+// uniquement, pas une vraie sécurité — visible dans le code source.
+function updateHistoryVisibility(){
+  const btn = document.getElementById("openHistory");
+  if(!btn) return;
+  btn.style.display = HISTORY_USERS.includes(getUsername()) ? "" : "none";
+}
+
 function openUserPicker(){
   const backdrop = document.getElementById("modalBackdrop");
   const box = document.getElementById("modalBox");
@@ -790,6 +806,7 @@ function openUserPicker(){
       localStorage.setItem(USER_KEY, u);
       backdrop.classList.remove("show");
       showToast(`Bonjour ${u}`);
+      updateHistoryVisibility();
     };
   });
   backdrop.onclick = (e) => { if(e.target === backdrop) backdrop.classList.remove("show"); };
@@ -813,6 +830,10 @@ document.getElementById("openUser").addEventListener("click", openUserModal);
 const actionLabels = { ajout: "Ajouté", maj: "Modifié", suppression: "Supprimé" };
 
 async function openHistorySheet(){
+  // Garde-fou en plus du masquage du bouton : même si quelqu'un ouvrait la
+  // fonction directement (ex. console du navigateur), l'accès reste bloqué
+  // pour les utilisateurs non autorisés.
+  if(!HISTORY_USERS.includes(getUsername())) return;
   document.getElementById("historyBackdrop").classList.add("show");
   document.getElementById("historySheet").classList.add("show");
   const listEl = document.getElementById("historyList");
@@ -1171,6 +1192,7 @@ document.getElementById("mailOrder").addEventListener("click", () => {
 });
 
 (async function init(){
+  updateHistoryVisibility();
   await loadData();
   render();
   renderOrderBadge();
