@@ -552,6 +552,13 @@ function queueWrite(payload){
 // of mergeServerData so a reload right after deleting can't resurrect them.
 let pendingDeletes = new Set();
 
+// Names with an add/update currently in flight (being sent to / verified
+// against the server) or still sitting in the local retry queue.
+// mergeServerData needs this to tell a product deleted on another device
+// (safe to remove locally) apart from a product we just added/edited here
+// that the server simply hasn't caught up with yet (must NOT be removed).
+let pendingConfirms = new Set();
+
 async function sendToServer(payload){
   if(!apiUrl) return false;
   try{
@@ -621,14 +628,18 @@ async function sendAndVerify(payload, isStillCurrent){
 async function apiUpdate(name, base, target){
   if(!apiUrl) return;
   const payload = {action:"update", name, base, target, user:getUsername()};
+  pendingConfirms.add(name); // protect from mergeServerData until confirmed
   const myGen = (writeGeneration[name] = (writeGeneration[name] || 0) + 1);
   const isStillCurrent = () => writeGeneration[name] === myGen;
   const ok = await sendAndVerify(payload, isStillCurrent);
-  if(!ok && isStillCurrent()){
+  if(ok){
+    pendingConfirms.delete(name);
+  } else if(isStillCurrent()){
     queueWrite(payload);
     showToast(navigator.onLine
       ? `"${name}" : le serveur n'a pas confirmé — nouvelle tentative en cours`
       : "Hors-ligne : sera envoyé à la reconnexion");
+    // stays in pendingConfirms until the queued retry is confirmed
   }
 }
 
@@ -659,6 +670,7 @@ async function flushQueue(){
     const ok = await sendAndVerify(payload);
     if(ok){
       if(payload.action === "delete") pendingDeletes.delete(payload.name);
+      else pendingConfirms.delete(payload.name);
     } else {
       remaining.push(payload);
     }
@@ -697,6 +709,12 @@ function mergeServerData(serverProducts){
       p.target = sp.target;
     }
   });
+  // remove local products the server no longer has — this is what makes a
+  // deletion done on ANOTHER device (phone, say) actually disappear here
+  // too. Skip anything with an add/update still in flight or queued on
+  // this device (pendingConfirms) so we never delete a product out from
+  // under someone who just added or edited it locally.
+  products = products.filter(p => byName[p.name] || pendingConfirms.has(p.name));
   // add any product that exists on the server but not locally
   // (skip ones we just asked the server to delete — avoids resurrecting
   // a product if the delete request is still in flight)
