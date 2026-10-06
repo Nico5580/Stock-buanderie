@@ -708,8 +708,7 @@ async function flushQueue(){
     if(writeQueue.length === 0 && hadItems > 0){
       showToast("Modifications en attente envoyées et confirmées");
     }
-    render();
-    renderOrderBadge();
+    safeRender();
   } finally {
     flushing = false;
   }
@@ -762,16 +761,43 @@ function mergeServerData(serverProducts){
   });
 }
 
+// ---- Rendu sûr ---------------------------------------------------------
+// render() reconstruit toute la liste : les cartes sont remplacées, un champ
+// en cours de saisie perd le focus et un tap en cours est perdu. On ne le
+// fait donc que si les données ont réellement changé, et jamais pendant
+// qu'une fenêtre est ouverte ou qu'un champ est en cours de saisie.
+function dataSignature(){
+  return JSON.stringify(products.map(p => [p.name, p.base, p.target])) +
+    "|" + writeQueue.length;
+}
+function isUserBusy(){
+  if(document.getElementById("modalBackdrop").classList.contains("show")) return true;
+  const a = document.activeElement;
+  return !!(a && a.tagName === "INPUT" && a.closest("#list"));
+}
+let renderPending = false;
+function safeRender(){
+  if(isUserBusy()){ renderPending = true; return; }
+  renderPending = false;
+  render();
+  renderOrderBadge();
+}
+// la carte actuellement affichée pour ce produit (la référence prise au
+// moment du rendu peut avoir été remplacée entre-temps)
+function liveCard(p){
+  return document.querySelector(`.card[data-id="${p.id}"]`);
+}
+
 function startPolling(){
   clearInterval(syncPollTimer);
   if(!apiUrl) return;
   syncPollTimer = setInterval(async () => {
     const serverProducts = await apiGet();
     if(serverProducts){
+      const before = dataSignature();
       mergeServerData(serverProducts);
       saveData(true);
-      render();
-      renderOrderBadge();
+      if(dataSignature() !== before || renderPending) safeRender();
       flushQueue();
     }
   }, 3000);
@@ -1085,7 +1111,7 @@ function render(){
       const ok = await customConfirm(`Ajouter 1 à "${p.name}" ?`, `Stock actuel : ${p.base}`);
       if(!ok) return;
       p.base += 1;
-      updateCard(card, p);
+      updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
@@ -1095,7 +1121,7 @@ function render(){
       const ok = await customConfirm(`Retirer 1 à "${p.name}" ?`, `Stock actuel : ${p.base}`);
       if(!ok) return;
       p.base = Math.max(0, p.base - 1);
-      updateCard(card, p);
+      updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
@@ -1106,7 +1132,7 @@ function render(){
       const n = parseInt(v, 10);
       if(!isNaN(n) && n >= 0){
         p.base = n;
-        updateCard(card, p);
+        updateCard(liveCard(p), p);
         saveDataDebounced();
         renderOrderBadge();
         apiUpdate(p.name, p.base, p.target);
@@ -1115,7 +1141,7 @@ function render(){
     card.querySelector(".target-input").addEventListener("change", (e) => {
       const v = e.target.value;
       p.target = v === "" ? null : Number(v);
-      updateCard(card, p);
+      updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
@@ -1190,6 +1216,7 @@ document.getElementById("openAdd").addEventListener("click", async () => {
 });
 
 function updateCard(card, p){
+  if(!card) return;
   const restant = restantOf(p);
   card.querySelector(".restant-count").textContent = restant;
   const badge = card.querySelector(".restant-badge");
