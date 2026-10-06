@@ -326,7 +326,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v4.2 · 6 oct. 2026";
+const APP_VERSION = "v4.3 · 6 oct. 2026";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -703,6 +703,7 @@ async function sendAndVerify(payload, isStillCurrent){
 async function apiUpdate(name, base, target){
   if(!apiUrl) return;
   const payload = {action:"update", name, base, target, user:getUsername()};
+  noteActivity(); // modification locale : on sonde plus vite pendant quelques secondes
   pendingConfirms.add(name); // protect from mergeServerData until confirmed
   // cette écriture remplace toute ancienne en attente pour ce produit
   if(writeQueue.some(q => q.name === name)){
@@ -727,6 +728,7 @@ async function apiUpdate(name, base, target){
 
 async function apiDelete(name){
   if(!apiUrl) return;
+  noteActivity();
   pendingDeletes.add(name);
   if(writeQueue.some(q => q.name === name)){
     writeQueue = writeQueue.filter(q => q.name !== name);
@@ -751,7 +753,7 @@ async function apiDelete(name){
 let flushing = false;
 async function flushQueue(){
   // verrou : le poll appelle flushQueue toutes les 3 s, sans ça plusieurs
-  // rejeux du même envoi se chevauchent
+  // rejeux du même envoi se chevauchent (le poll l'appelle à chaque tour)
   if(flushing || writeQueue.length === 0 || !apiUrl) return;
   flushing = true;
   try{
@@ -799,7 +801,7 @@ function mergeServerData(serverProducts){
   products.forEach(p => {
     const sp = byName[p.name];
     // Ne jamais écraser une valeur locale dont l'envoi est en cours ou en
-    // file d'attente : sinon le poll (toutes les 3 s) ramène l'ancien stock
+    // file d'attente : sinon le poll (toutes les 3 à 5 s) ramène l'ancien stock
     // du serveur avant que la modification y soit arrivée.
     if(sp && !pendingConfirms.has(p.name)){
       p.base = sp.base;
@@ -853,17 +855,39 @@ function liveCard(p){
   return document.querySelector(`.card[data-id="${p.id}"]`);
 }
 
-function startPolling(){
-  clearInterval(syncPollTimer);
-  if(!apiUrl) return;
-  syncPollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
-}
-
 // Google limite le temps d'exécution quotidien d'un script Apps Script :
-// interroger toutes les 3 s, même app en arrière-plan, finit par saturer le
+// interroger trop souvent, même app en arrière-plan, finit par saturer le
 // quota et les écritures échouent. On ne sonde donc que quand l'app est
 // visible, et on resynchronise tout de suite quand elle revient au premier plan.
+// Rythme normal : 5 s. Juste après une activité (une modification faite ici,
+// une modification reçue d'un autre appareil, ou l'app qui revient au premier
+// plan), on passe à 3 s pendant 20 s : c'est le moment où plusieurs personnes
+// sont susceptibles de travailler ensemble, puis on revient à 5 s.
 const POLL_INTERVAL_MS = 5000;
+const POLL_FAST_MS = 3000;
+const POLL_FAST_WINDOW_MS = 20000;
+let lastActivityAt = 0;
+function noteActivity(){ lastActivityAt = Date.now(); }
+function currentPollDelay(){
+  return (Date.now() - lastActivityAt < POLL_FAST_WINDOW_MS) ? POLL_FAST_MS : POLL_INTERVAL_MS;
+}
+// L'intervalle est mesuré de début de requête à début de requête (la durée de
+// la requête est déduite de l'attente), avec 1 s minimum entre deux requêtes.
+// pollLoopId : si startPolling() est rappelé (changement d'URL) pendant qu'une
+// requête est en cours, l'ancienne boucle s'arrête au lieu de doubler la nouvelle.
+let pollLoopId = 0;
+async function pollLoop(id){
+  const t0 = Date.now();
+  try{ await pollOnce(); }catch(e){ /* ignore, on réessaie au prochain tour */ }
+  if(id !== pollLoopId || !apiUrl) return;
+  syncPollTimer = setTimeout(() => pollLoop(id), Math.max(1000, currentPollDelay() - (Date.now() - t0)));
+}
+function startPolling(){
+  clearTimeout(syncPollTimer);
+  const id = ++pollLoopId;
+  if(!apiUrl) return;
+  syncPollTimer = setTimeout(() => pollLoop(id), currentPollDelay());
+}
 let pollBusy = false;
 async function pollOnce(){
   if(document.hidden || pollBusy) return;
@@ -874,7 +898,8 @@ async function pollOnce(){
       const before = dataSignature();
       mergeServerData(serverProducts);
       saveData(true);
-      if(dataSignature() !== before || renderPending) safeRender();
+      if(dataSignature() !== before){ noteActivity(); safeRender(); }
+      else if(renderPending) safeRender();
       flushQueue();
     }
   } finally {
@@ -882,7 +907,7 @@ async function pollOnce(){
   }
 }
 document.addEventListener("visibilitychange", () => {
-  if(!document.hidden && apiUrl) pollOnce();
+  if(!document.hidden && apiUrl){ noteActivity(); pollOnce(); }
 });
 
 function exportCsv(){
