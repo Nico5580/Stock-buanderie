@@ -27,6 +27,20 @@
   body{padding-bottom:40px;}
 
 
+
+  /* ---- Export ---- */
+  .exp-group{padding:12px 0 6px; border-bottom:1px solid var(--line);}
+  .exp-group:last-child{border-bottom:none;}
+  .exp-group h3{margin:0 0 4px; font-size:15px;}
+  .exp-group .exp-desc{font-size:12px; color:#6b787d; margin-bottom:10px;}
+  .exp-actions{display:flex; gap:8px; flex-wrap:wrap;}
+  .exp-btn{
+    flex:1 1 30%; min-width:0; padding:11px 6px; border-radius:10px; border:1px solid var(--line);
+    background:var(--card); color:var(--ink); font-size:13px; font-weight:600; line-height:1.25;
+  }
+  .exp-btn:active{background:#e4ebf8;}
+  .exp-btn[disabled]{opacity:0.5;}
+
   /* ---- Bandeau EAFC ---- */
   .brand{
     position:relative; color:#fff; overflow:hidden;
@@ -99,6 +113,10 @@
   .restant-badge.low{background:#f7e6e0; color:var(--warn);}
   .restant-badge.zero{background:#f2dcd4; color:var(--warn);}
 
+  .edit-btn{
+    background:none; border:none; font-size:14px; cursor:pointer; padding:4px 6px; border-radius:8px; color:var(--muted,#7a7a7a);
+  }
+  .edit-btn:active{background:#dfe8f5;}
   .del-btn{
     background:none; border:none; color:#b9a99f; font-size:15px;
     width:22px; height:22px; display:flex; align-items:center; justify-content:center;
@@ -258,6 +276,7 @@
     </button>
     <button class="sync-btn" id="openAdd" title="Ajouter un produit">➕</button>
     <button class="sync-btn" id="openHistory" title="Historique">🕘</button>
+    <button class="sync-btn" id="openExport" title="Exporter">📤</button>
     <button class="sync-btn" id="openUser" title="Ton nom">👤</button>
     <button class="sync-btn" id="openSync" title="Synchronisation">⚙️</button>
   </div>
@@ -295,10 +314,19 @@
   <div class="sheet-body" id="historyList"></div>
 </div>
 
+<div class="sheet-backdrop" id="exportBackdrop"></div>
+<div class="sheet" id="exportSheet">
+  <div class="sheet-header">
+    <h2>Exporter</h2>
+    <button class="sheet-close" id="closeExport">&times;</button>
+  </div>
+  <div class="sheet-body" id="exportBody"></div>
+</div>
+
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v3 · 6 oct. 2026";
+const APP_VERSION = "v4.2 · 6 oct. 2026";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -858,19 +886,8 @@ document.addEventListener("visibilitychange", () => {
 });
 
 function exportCsv(){
-  const rows = [["nom", "stock", "cible"]].concat(
-    products.map(p => [p.name, p.base, p.target === null ? "" : p.target])
-  );
-  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }); // BOM for Excel
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "stock-buanderie-" + new Date().toISOString().slice(0, 10) + ".csv";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  const ds = inventoryDataset();
+  downloadFile(ds.file + ".csv", makeCsv(ds.header, ds.rows));
 }
 
 function openSyncModal(){
@@ -1135,6 +1152,7 @@ function render(){
         </div>
         <div style="display:flex; align-items:center; gap:6px;">
           <div class="${badgeClass}">${restant}</div>
+          <button class="edit-btn" title="Renommer ce produit">✏️</button>
           <button class="del-btn" title="Supprimer ce produit">✕</button>
         </div>
       </div>
@@ -1200,6 +1218,10 @@ function render(){
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
     });
+    card.querySelector(".edit-btn").addEventListener("click", async () => {
+      if(!(await requireStructureAccess())) return;
+      openRenameModal(p);
+    });
     card.querySelector(".del-btn").addEventListener("click", async () => {
       if(!(await requireStructureAccess())) return;
       const ok = await customConfirm(`Supprimer "${esc(p.name)}" ?`, `Cette action est définitive après ${UNDO_WINDOW_MS/1000}s (tu peux annuler juste après).`);
@@ -1230,6 +1252,43 @@ function render(){
       });
     });
   });
+}
+
+function openRenameModal(p){
+  const backdrop = document.getElementById("modalBackdrop");
+  const box = document.getElementById("modalBox");
+  box.innerHTML = `
+    <p>Renommer le produit</p>
+    <div class="modal-sub">Nouveau nom</div>
+    <input type="text" id="mRenName" value="${esc(p.name)}">
+    <div class="modal-actions">
+      <button class="modal-cancel" id="mRenCancel">Annuler</button>
+      <button class="modal-confirm" id="mRenOk">Renommer</button>
+    </div>`;
+  backdrop.classList.add("show");
+  const input = document.getElementById("mRenName");
+  setTimeout(() => { input.focus(); input.select(); }, 50);
+  document.getElementById("mRenCancel").onclick = () => backdrop.classList.remove("show");
+  document.getElementById("mRenOk").onclick = () => {
+    const newName = input.value.trim();
+    const oldName = p.name;
+    if(!newName){ showToast("Nom requis"); return; }
+    if(newName === oldName){ backdrop.classList.remove("show"); return; }
+    if(products.some(x => x !== p && x.name.toLowerCase() === newName.toLowerCase())){
+      showToast("Ce nom existe déjà");
+      return;
+    }
+    p.name = newName;
+    saveData(true);
+    // le serveur ne connaît pas le renommage : on crée le nouveau nom (avec le même
+    // stock/cible) puis on supprime l'ancien. L'ancien est protégé du poll entre-temps.
+    pendingDeletes.add(oldName);
+    backdrop.classList.remove("show");
+    render();
+    renderOrderBadge();
+    showToast("Produit renommé");
+    apiUpdate(newName, p.base, p.target).then(() => apiDelete(oldName));
+  };
 }
 
 function openAddModal(){
@@ -1378,6 +1437,248 @@ document.getElementById("mailOrder").addEventListener("click", () => {
   const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
   window.location.href = mailto;
 });
+
+
+// ---- Export lisible : inventaire et historique -------------------------
+// Trois sorties pour chaque jeu de données : impression / PDF (mise en page
+// propre), fichier tableur (CSV à points-virgules, s'ouvre en colonnes dans
+// Excel/Numbers en français) et partage (feuille de partage de l'iPhone).
+function csvCell(v){
+  const t = String(v == null ? "" : v);
+  return /[;"\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+}
+function makeCsv(header, rows){
+  return "﻿" + [header].concat(rows).map(r => r.map(csvCell).join(";")).join("\r\n");
+}
+function fmtDateTime(ts){
+  const d = new Date(ts);
+  return isNaN(d) ? String(ts) : d.toLocaleString("fr-BE", {day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit"});
+}
+function fmtDelta(n){
+  if(n === "" || n == null) return "";
+  return n > 0 ? "+" + n : n < 0 ? "−" + Math.abs(n) : "0";
+}
+function todayIso(){ return new Date().toISOString().slice(0, 10); }
+
+function inventoryDataset(){
+  const list = products.slice().sort((a, b) => a.name.localeCompare(b.name, "fr", {sensitivity:"base"}));
+  const rows = list.map(p => {
+    const hasTarget = p.target !== null && p.target !== "" && !isNaN(p.target);
+    const toOrder = hasTarget ? Math.max(0, p.target - p.base) : "";
+    const state = p.base <= 0 ? "Rupture" : p.base <= 2 ? "Stock bas" : "OK";
+    return [p.name, p.base, hasTarget ? p.target : "", toOrder, state];
+  });
+  const rupture = rows.filter(r => r[4] === "Rupture").length;
+  const bas = rows.filter(r => r[4] === "Stock bas").length;
+  const toBuy = rows.filter(r => r[3] !== "" && r[3] > 0).length;
+  return {
+    kind: "inv",
+    title: "Inventaire de la buanderie",
+    file: "inventaire-buanderie-" + todayIso(),
+    header: ["Produit", "Stock", "Cible", "À commander", "État"],
+    rows,
+    summary: `${rows.length} produits · ${rupture} en rupture · ${bas} en stock bas · ${toBuy} à commander`,
+    numCols: [1, 2, 3],
+    rowState: r => r[4] === "Rupture" ? "rupture" : r[4] === "Stock bas" ? "bas" : ""
+  };
+}
+
+function historyDataset(log){
+  // calcule la variation de stock : on rejoue les entrées dans l'ordre chrono
+  const ts = e => { const t = new Date(e.timestamp).getTime(); return isNaN(t) ? 0 : t; };
+  const asc = log.slice().sort((a, b) => ts(a) - ts(b));
+  const last = {};
+  const enriched = asc.map(e => {
+    let delta = "";
+    if(e.action === "suppression"){
+      delete last[e.name];
+    } else {
+      const prev = last[e.name];
+      if(e.action === "maj" && prev !== undefined && e.base != null && !isNaN(e.base)) delta = Number(e.base) - Number(prev);
+      if(e.base != null) last[e.name] = e.base;
+    }
+    return {e, delta};
+  }).reverse(); // le plus récent en premier
+  const rows = enriched.map(({e, delta}) => [
+    fmtDateTime(e.timestamp),
+    e.user || "Inconnu",
+    actionLabels[e.action] || e.action,
+    e.name,
+    e.action === "suppression" || e.base == null ? "" : e.base,
+    fmtDelta(delta),
+    e.action === "suppression" || e.target == null ? "" : e.target
+  ]);
+  const first = asc.length ? fmtDateTime(asc[0].timestamp) : "";
+  const lastD = asc.length ? fmtDateTime(asc[asc.length - 1].timestamp) : "";
+  return {
+    kind: "hist",
+    title: "Historique des modifications",
+    file: "historique-buanderie-" + todayIso(),
+    header: ["Date", "Qui", "Action", "Produit", "Stock", "Variation", "Cible"],
+    rows,
+    summary: rows.length ? `${rows.length} modifications · du ${first} au ${lastD}` : "Aucune modification enregistrée",
+    numCols: [4, 5, 6],
+    rowState: r => r[2] === "Supprimé" ? "rupture" : ""
+  };
+}
+
+function fmtDay(ts){
+  const d = new Date(ts);
+  return isNaN(d) ? "" : d.toLocaleDateString("fr-BE", {day:"2-digit", month:"2-digit", year:"numeric"});
+}
+
+// Récapitulatif des entrées de stock (variations positives) par date, avec le stock d'avant
+function entriesDataset(log){
+  const ts = e => { const t = new Date(e.timestamp).getTime(); return isNaN(t) ? 0 : t; };
+  const asc = log.slice().sort((a, b) => ts(a) - ts(b));
+  const last = {};
+  const out = [];
+  let unknown = 0;
+  asc.forEach(e => {
+    if(e.action === "suppression"){ delete last[e.name]; return; }
+    if(e.base == null || isNaN(e.base)) return;
+    const prev = last[e.name];
+    const now = Number(e.base);
+    if(e.action === "ajout"){
+      if(now > 0) out.push({e, avant: 0, plus: now, note: "nouveau produit"});
+    } else if(prev !== undefined){
+      if(now > Number(prev)) out.push({e, avant: Number(prev), plus: now - Number(prev), note: ""});
+    } else {
+      unknown++;
+    }
+    last[e.name] = now;
+  });
+  out.reverse();
+  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, o.e.user || "Inconnu", o.note]);
+  const total = out.reduce((a, o) => a + o.plus, 0);
+  const days = new Set(rows.map(r => r[0])).size;
+  return {
+    kind: "in",
+    title: "Entrées de stock par date",
+    file: "entrees-buanderie-" + todayIso(),
+    header: ["Date", "Produit", "Avant", "Entrée", "Après", "Qui", "Remarque"],
+    rows,
+    summary: rows.length ? `${rows.length} entrées sur ${days} jour(s) · ${total} unités ajoutées` + (unknown ? ` · ${unknown} produit(s) sans stock antérieur connu ignoré(s)` : "") : "Aucune entrée de stock dans l'historique",
+    numCols: [2, 3, 4],
+    rowState: () => ""
+  };
+}
+
+function reportHtml(ds){
+  const who = getUsername() || "—";
+  const th = ds.header.map((h, i) => `<th style="text-align:${ds.numCols.includes(i) ? "right" : "left"}; border-bottom:2px solid #333; padding:6px 5px;">${esc(h)}</th>`).join("");
+  const body = ds.rows.map(r => {
+    const st = ds.rowState(r);
+    const style = st === "rupture" ? "color:#a8492f; font-weight:700;" : st === "bas" ? "color:#a8492f;" : "";
+    return "<tr>" + r.map((c, i) => `<td style="padding:5px; border-bottom:1px solid #ccc; ${ds.numCols.includes(i) ? "text-align:right;" : ""} ${style}">${esc(c)}</td>`).join("") + "</tr>";
+  }).join("");
+  return `
+    <h2 style="font-family:sans-serif; margin:0 0 4px;">${esc(ds.title)} — Buanderie EAFC</h2>
+    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 4px;">Exporté le ${esc(fmtDateTime(new Date()))} par ${esc(who)}</p>
+    <p style="font-family:sans-serif; font-size:13px; margin:0 0 12px;"><b>${esc(ds.summary)}</b></p>
+    <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:12.5px;">
+      <thead><tr>${th}</tr></thead><tbody>${body}</tbody>
+    </table>`;
+}
+
+function readableText(ds){
+  if(ds.kind === "inv"){
+    return ds.title + " — " + fmtDateTime(new Date()) + "\n" + ds.summary + "\n\n" +
+      ds.rows.map(r => `${r[0]} : ${r[1]}` + (r[2] !== "" ? ` (cible ${r[2]}${r[3] > 0 ? ", à commander " + r[3] : ""})` : "") + (r[4] !== "OK" ? ` — ${r[4]}` : "")).join("\n");
+  }
+  if(ds.kind === "in"){
+    return ds.title + " — " + fmtDateTime(new Date()) + "\n" + ds.summary + "\n\n" +
+      ds.rows.map(r => `${r[0]} · ${r[1]} : ${r[2]} → ${r[4]} (${r[3]}) · ${r[5]}`).join("\n");
+  }
+  return ds.title + " — " + fmtDateTime(new Date()) + "\n" + ds.summary + "\n\n" +
+    ds.rows.map(r => `${r[0]} · ${r[1]} · ${r[2]} ${r[3]}` + (r[4] !== "" ? ` → stock ${r[4]}` : "") + (r[5] !== "" ? ` (${r[5]})` : "")).join("\n");
+}
+
+function downloadFile(name, content, type){
+  const blob = new Blob([content], {type: type || "text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function shareDataset(ds){
+  const csv = makeCsv(ds.header, ds.rows);
+  const name = ds.file + ".csv";
+  try{
+    const file = new File([csv], name, {type: "text/csv"});
+    if(navigator.canShare && navigator.canShare({files: [file]})){
+      await navigator.share({files: [file], title: ds.title});
+      return;
+    }
+  }catch(e){ if(e && e.name === "AbortError") return; }
+  try{
+    if(navigator.share){
+      await navigator.share({title: ds.title, text: readableText(ds)});
+      return;
+    }
+  }catch(e){ if(e && e.name === "AbortError") return; }
+  downloadFile(name, csv);
+  showToast("Fichier enregistré");
+}
+
+async function getDataset(kind){
+  if(kind === "inv") return inventoryDataset();
+  if(!HISTORY_USERS.includes(getUsername())) return null;
+  if(!apiUrl){ showToast("L'historique n'existe qu'en mode synchronisé"); return null; }
+  showToast("Chargement de l'historique…");
+  const log = await apiGetLog(1000);
+  if(!log){ showToast("Impossible de charger l'historique"); return null; }
+  return kind === "in" ? entriesDataset(log) : historyDataset(log);
+}
+
+async function runExport(kind, act){
+  const ds = await getDataset(kind);
+  if(!ds) return;
+  if(act === "print"){
+    document.getElementById("printArea").innerHTML = reportHtml(ds);
+    window.print();
+  } else if(act === "csv"){
+    downloadFile(ds.file + ".csv", makeCsv(ds.header, ds.rows));
+    showToast("Fichier " + ds.file + ".csv");
+  } else if(act === "share"){
+    await shareDataset(ds);
+  }
+}
+
+function openExportSheet(){
+  const canHist = HISTORY_USERS.includes(getUsername());
+  const group = (kind, title, desc) => `
+    <div class="exp-group">
+      <h3>${title}</h3>
+      <div class="exp-desc">${desc}</div>
+      <div class="exp-actions">
+        <button class="exp-btn" data-kind="${kind}" data-act="print">🖨<br>Imprimer / PDF</button>
+        <button class="exp-btn" data-kind="${kind}" data-act="csv">📊<br>Tableur (.csv)</button>
+        <button class="exp-btn" data-kind="${kind}" data-act="share">📤<br>Partager</button>
+      </div>
+    </div>`;
+  const body = document.getElementById("exportBody");
+  body.innerHTML =
+    group("inv", "Inventaire actuel", "Produit, stock, cible, quantité à commander et état.") +
+    (canHist ? group("in", "Entrées de stock par date", "Produits rentrés (variation positive) par date, avec le stock d'avant.") + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
+  body.querySelectorAll("[data-act]").forEach(btn => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try{ await runExport(btn.dataset.kind, btn.dataset.act); } finally { btn.disabled = false; }
+    };
+  });
+  document.getElementById("exportBackdrop").classList.add("show");
+  document.getElementById("exportSheet").classList.add("show");
+}
+function closeExportSheet(){
+  document.getElementById("exportBackdrop").classList.remove("show");
+  document.getElementById("exportSheet").classList.remove("show");
+}
+document.getElementById("openExport").addEventListener("click", openExportSheet);
+document.getElementById("closeExport").addEventListener("click", closeExportSheet);
+document.getElementById("exportBackdrop").addEventListener("click", closeExportSheet);
 
 (async function init(){
   document.getElementById("appVersion").textContent = "Version " + APP_VERSION;
