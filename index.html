@@ -543,6 +543,9 @@ function saveQueue(){
 let writeQueue = loadQueue();
 
 function queueWrite(payload){
+  // une seule écriture en attente par produit : la plus récente remplace les
+  // anciennes (sinon une vieille valeur rejouée plus tard écraserait la bonne)
+  writeQueue = writeQueue.filter(q => q.name !== payload.name);
   writeQueue.push(payload);
   saveQueue();
   render(); // refresh the "en attente" badge in the status line right away
@@ -558,6 +561,13 @@ let pendingDeletes = new Set();
 // (safe to remove locally) apart from a product we just added/edited here
 // that the server simply hasn't caught up with yet (must NOT be removed).
 let pendingConfirms = new Set();
+
+// Après un rechargement de page, les écritures encore en file d'attente
+// doivent rester protégées du poll, sinon la valeur locale est écrasée.
+writeQueue.forEach(q => {
+  if(q.action === "delete") pendingDeletes.add(q.name);
+  else pendingConfirms.add(q.name);
+});
 
 async function sendToServer(payload){
   if(!apiUrl) return false;
@@ -629,11 +639,18 @@ async function apiUpdate(name, base, target){
   if(!apiUrl) return;
   const payload = {action:"update", name, base, target, user:getUsername()};
   pendingConfirms.add(name); // protect from mergeServerData until confirmed
+  // cette écriture remplace toute ancienne en attente pour ce produit
+  if(writeQueue.some(q => q.name === name)){
+    writeQueue = writeQueue.filter(q => q.name !== name);
+    saveQueue();
+  }
   const myGen = (writeGeneration[name] = (writeGeneration[name] || 0) + 1);
   const isStillCurrent = () => writeGeneration[name] === myGen;
   const ok = await sendAndVerify(payload, isStillCurrent);
   if(ok){
-    pendingConfirms.delete(name);
+    // seulement si aucune écriture plus récente n'a pris le relais : sinon
+    // c'est elle qui doit garder la protection contre le poll
+    if(isStillCurrent()) pendingConfirms.delete(name);
   } else if(isStillCurrent()){
     queueWrite(payload);
     showToast(navigator.onLine
@@ -646,12 +663,16 @@ async function apiUpdate(name, base, target){
 async function apiDelete(name){
   if(!apiUrl) return;
   pendingDeletes.add(name);
+  if(writeQueue.some(q => q.name === name)){
+    writeQueue = writeQueue.filter(q => q.name !== name);
+    saveQueue();
+  }
   const payload = {action:"delete", name, user:getUsername()};
   const myGen = (writeGeneration[name] = (writeGeneration[name] || 0) + 1);
   const isStillCurrent = () => writeGeneration[name] === myGen;
   const ok = await sendAndVerify(payload, isStillCurrent);
   if(ok){
-    pendingDeletes.delete(name);
+    if(isStillCurrent()) pendingDeletes.delete(name);
   } else if(isStillCurrent()){
     queueWrite(payload);
     showToast(navigator.onLine
@@ -662,26 +683,35 @@ async function apiDelete(name){
   }
 }
 
+let flushing = false;
 async function flushQueue(){
-  if(writeQueue.length === 0 || !apiUrl) return;
-  const hadItems = writeQueue.length;
-  const remaining = [];
-  for(const payload of writeQueue){
-    const ok = await sendAndVerify(payload);
-    if(ok){
-      if(payload.action === "delete") pendingDeletes.delete(payload.name);
-      else pendingConfirms.delete(payload.name);
-    } else {
-      remaining.push(payload);
+  // verrou : le poll appelle flushQueue toutes les 3 s, sans ça plusieurs
+  // rejeux du même envoi se chevauchent
+  if(flushing || writeQueue.length === 0 || !apiUrl) return;
+  flushing = true;
+  try{
+    const hadItems = writeQueue.length;
+    const batch = writeQueue.slice();
+    for(const payload of batch){
+      const name = payload.name;
+      const gen = (writeGeneration[name] = (writeGeneration[name] || 0) + 1);
+      const isStillCurrent = () => writeGeneration[name] === gen;
+      const ok = await sendAndVerify(payload, isStillCurrent);
+      if(!isStillCurrent()) continue; // une écriture plus récente a pris le relais
+      if(ok){
+        writeQueue = writeQueue.filter(q => q !== payload);
+        if(payload.action === "delete") pendingDeletes.delete(name);
+        else pendingConfirms.delete(name);
+      }
     }
-  }
-  writeQueue = remaining;
-  saveQueue();
-  if(remaining.length === 0 && hadItems > 0){
-    showToast("Modifications en attente envoyées et confirmées");
+    saveQueue();
+    if(writeQueue.length === 0 && hadItems > 0){
+      showToast("Modifications en attente envoyées et confirmées");
+    }
     render();
-  } else if(remaining.length < hadItems){
-    render();
+    renderOrderBadge();
+  } finally {
+    flushing = false;
   }
 }
 window.addEventListener("online", flushQueue);
@@ -704,7 +734,10 @@ function mergeServerData(serverProducts){
   serverProducts.forEach(sp => byName[sp.name] = sp);
   products.forEach(p => {
     const sp = byName[p.name];
-    if(sp){
+    // Ne jamais écraser une valeur locale dont l'envoi est en cours ou en
+    // file d'attente : sinon le poll (toutes les 3 s) ramène l'ancien stock
+    // du serveur avant que la modification y soit arrivée.
+    if(sp && !pendingConfirms.has(p.name)){
       p.base = sp.base;
       p.target = sp.target;
     }
