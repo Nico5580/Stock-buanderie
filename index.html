@@ -326,7 +326,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v4.5 · 7 oct. 2026";
+const APP_VERSION = "v4.6 · 7 oct. 2026";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -574,6 +574,81 @@ function restantOf(p){
 }
 
 const GET_TIMEOUT_MS = 20000;
+let lastApiError = "";      // dernière cause d'échec de lecture, affichée dans l'indicateur
+let lastSource = "";        // "feuille" (lecture directe) ou "script" (Apps Script)
+
+// ---- Lecture directe de la feuille Google -------------------------------
+// Le script Apps Script est lent (2 à 5 s) et échoue par moments (page
+// « introuvable » après 20-45 s) dès que plusieurs téléphones l'interrogent.
+// Les lectures de sondage passent donc par la feuille elle-même (≈ 0,3 s,
+// aucune charge sur le script), qui reste lisible par lien. Le script ne sert
+// plus qu'aux écritures. Si la lecture directe échoue (feuille rendue privée,
+// réseau…), on retombe automatiquement sur le script.
+const SHEET_ID = "1-95zEFbRVItLUfUQJT-uVwz48dHZzqh2-4GKWPXNG7A";
+const SHEET_TAB = "Stock";
+const GVIZ_TIMEOUT_MS = 8000;
+let gvizBlockedUntil = 0;   // après un échec, on n'insiste pas pendant 1 min
+function gvizGet(){
+  // uniquement pour la feuille d'origine : un autre script = une autre feuille
+  if(apiUrl !== DEFAULT_API_URL || Date.now() < gvizBlockedUntil) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const cb = "__gv" + Math.random().toString(36).slice(2);
+    const s = document.createElement("script");
+    let finished = false;
+    const finish = (val, why) => {
+      if(finished) return;
+      finished = true;
+      clearTimeout(to);
+      delete window[cb];
+      s.remove();
+      if(!val) gvizBlockedUntil = Date.now() + 60 * 1000;
+      if(!val && why) lastApiError = why;
+      resolve(val);
+    };
+    const to = setTimeout(() => finish(null, "lecture directe : délai dépassé"), GVIZ_TIMEOUT_MS);
+    window[cb] = (resp) => {
+      try{
+        const cols = resp && resp.table && resp.table.cols || [];
+        const rows = resp && resp.table && resp.table.rows || [];
+        if(resp.status !== "ok" || !cols.length || cols[0].label !== "name" || !rows.length){
+          return finish(null, "lecture directe : format inattendu");
+        }
+        const out = [];
+        rows.forEach(r => {
+          const c = r.c || [];
+          const name = c[0] && c[0].v;
+          if(name === null || name === undefined || name === "") return;
+          const base = c[1] && c[1].v;
+          const target = c[2] && c[2].v;
+          out.push({
+            name: String(name),
+            base: Number(base) || 0,
+            target: (target === null || target === undefined || target === "") ? null : Number(target)
+          });
+        });
+        finish(out.length ? out : null, "lecture directe : aucune ligne");
+      }catch(e){ finish(null, "lecture directe : erreur"); }
+    };
+    s.onerror = () => finish(null, "lecture directe : refusée");
+    // Page de connexion / d'erreur renvoyée à la place des données : le fichier
+    // se charge sans appeler notre fonction (la fonction est appelée pendant
+    // l'exécution du script, avant l'événement load). On n'attend pas le délai.
+    s.onload = () => setTimeout(() => finish(null, "lecture directe : refusée"), 0);
+    s.src = "https://docs.google.com/spreadsheets/d/" + SHEET_ID + "/gviz/tq?sheet=" +
+      encodeURIComponent(SHEET_TAB) + "&headers=1&tqx=" + encodeURIComponent("out:json;responseHandler:" + cb) +
+      "&_=" + Date.now();
+    document.head.appendChild(s);
+  });
+}
+
+// Lecture de sondage : feuille d'abord, script en repli.
+async function apiGetFast(){
+  const direct = await gvizGet();
+  if(direct){ lastSource = "feuille"; return direct; }
+  lastSource = "script";   // repli : le rythme de sondage ralentit pour ménager le script
+  return await apiGet();
+}
+
 async function apiGet(){
   if(!apiUrl) return null;
   // Délai maximum : sans lui, une requête qui reste bloquée (iPhone remis en
@@ -589,7 +664,12 @@ async function apiGet(){
     const res = await fetch(apiUrl + sep + "_=" + Date.now(), {method:"GET", cache:"no-store", signal: ctrl.signal});
     const data = await res.json();
     if(data && data.ok) return data.products;
-  }catch(e){ /* offline, misconfigured or timed out — silently fall back */ }
+    lastApiError = "réponse invalide du script";
+  }catch(e){ /* offline, misconfigured or timed out — silently fall back */
+    lastApiError = (e && e.name === "AbortError") ? "le script Google ne répond pas (délai dépassé)"
+      : (e instanceof SyntaxError) ? "le script Google renvoie une erreur"
+      : "réseau";
+  }
   finally{ clearTimeout(killer); }
   return null;
 }
@@ -682,8 +762,17 @@ const MAX_VERIFY_ATTEMPTS = 3; // includes the first send
 let writeGeneration = {};
 
 async function verifyWrite(payload){
+  // 1) lecture directe de la feuille : rapide, et c'est la vérité (ce qui est
+  //    réellement écrit). Si elle confirme, inutile de solliciter le script.
+  const fast = await gvizGet();
+  if(fast && writeMatches(fast, payload)) return true;
+  // 2) sinon (pas de lecture directe, ou valeur pas encore visible) : le script
+  //    tranche, comme avant.
   const products = await apiGet();
   if(!products) return null; // couldn't check right now — not a confirmed failure
+  return writeMatches(products, payload);
+}
+function writeMatches(products, payload){
   const found = products.find(p => p.name === payload.name);
   if(payload.action === "delete") return !found;
   if(payload.action === "update"){
@@ -869,21 +958,19 @@ function liveCard(p){
   return document.querySelector(`.card[data-id="${p.id}"]`);
 }
 
-// Google limite le temps d'exécution quotidien d'un script Apps Script :
-// interroger trop souvent, même app en arrière-plan, finit par saturer le
-// quota et les écritures échouent. On ne sonde donc que quand l'app est
-// visible, et on resynchronise tout de suite quand elle revient au premier plan.
-// Rythme normal : 5 s. Juste après une activité (une modification faite ici,
-// une modification reçue d'un autre appareil, ou l'app qui revient au premier
-// plan), on passe à 3 s pendant 20 s : c'est le moment où plusieurs personnes
-// sont susceptibles de travailler ensemble, puis on revient à 5 s.
-const POLL_INTERVAL_MS = 5000;
-const POLL_FAST_MS = 3000;
+// On ne sonde que quand l'app est visible, et on resynchronise tout de suite
+// quand elle revient au premier plan. Juste après une activité (modification
+// faite ici, modification reçue d'un autre appareil, retour au premier plan),
+// on passe en rythme rapide pendant 20 s, puis on revient au rythme normal.
+// Lecture directe de la feuille (légère) : 4 s normal, 2 s rapide.
+// Repli sur le script Apps Script (lent, quota limité) : 10 s normal, 6 s rapide.
 const POLL_FAST_WINDOW_MS = 20000;
 let lastActivityAt = 0;
 function noteActivity(){ lastActivityAt = Date.now(); }
 function currentPollDelay(){
-  return (Date.now() - lastActivityAt < POLL_FAST_WINDOW_MS) ? POLL_FAST_MS : POLL_INTERVAL_MS;
+  const fast = Date.now() - lastActivityAt < POLL_FAST_WINDOW_MS;
+  if(lastSource === "script") return fast ? 6000 : 10000;
+  return fast ? 2000 : 4000;
 }
 // L'intervalle est mesuré de début de requête à début de requête (la durée de
 // la requête est déduite de l'attente), avec 1 s minimum entre deux requêtes.
@@ -905,33 +992,45 @@ function startPolling(){
 let pollBusy = false;
 let pollStartedAt = 0;
 let lastSyncOkAt = 0;   // dernière lecture serveur réussie
+let pollFailing = false; // la dernière tentative de lecture a échoué
+let resumedAt = Date.now(); // dernier retour au premier plan (ou chargement)
 function updateSyncLabel(){
   const el = document.getElementById("syncLive");
   if(!el) return;
   if(!apiUrl){ el.className = "sync-status"; el.textContent = "○ Mode local"; return; }
   const age = lastSyncOkAt ? Math.round((Date.now() - lastSyncOkAt) / 1000) : null;
-  if(age !== null && age <= 25){
+  const sinceResume = (Date.now() - resumedAt) / 1000;
+  if(age !== null && age <= 25 && !pollFailing){
     el.className = "sync-status on"; el.textContent = "● Synchronisé";
-  } else if(age === null){
-    el.className = "sync-status"; el.textContent = "○ Synchro en cours…";
-  } else {
-    el.className = "sync-status"; el.style.color = "var(--warn)";
-    el.textContent = age < 90 ? `⚠ Pas de synchro depuis ${age} s` : `⚠ Pas de synchro depuis ${Math.round(age / 60)} min`;
+    el.style.color = "";
     return;
   }
-  el.style.color = "";
+  // Alerte seulement si une lecture a réellement échoué, ou si rien n'est
+  // revenu depuis 30 s alors que l'app est au premier plan. Juste après un
+  // retour au premier plan, le compteur affiche l'ancienne synchro : ce n'est
+  // pas une panne, la première lecture est simplement en cours.
+  if(pollFailing || sinceResume > 30){
+    const depuis = age === null ? "" : (age < 90 ? ` depuis ${age} s` : ` depuis ${Math.round(age / 60)} min`);
+    el.className = "sync-status"; el.style.color = "var(--warn)";
+    el.textContent = `⚠ Pas de synchro${depuis}` + (lastApiError ? ` · ${lastApiError}` : "");
+    return;
+  }
+  el.className = "sync-status"; el.style.color = "";
+  el.textContent = "↻ Mise à jour…";
 }
 setInterval(updateSyncLabel, 2000);
 async function pollOnce(){
   if(document.hidden) return;
   // verrou déjà pris depuis trop longtemps : la requête précédente est perdue
-  if(pollBusy && Date.now() - pollStartedAt < GET_TIMEOUT_MS + 5000) return;
+  if(pollBusy && Date.now() - pollStartedAt < GVIZ_TIMEOUT_MS + GET_TIMEOUT_MS + 5000) return;
   pollBusy = true;
   pollStartedAt = Date.now();
   try{
-    const serverProducts = await apiGet();
+    const serverProducts = await apiGetFast();
+    if(!serverProducts){ pollFailing = true; updateSyncLabel(); }
     if(serverProducts){
       lastSyncOkAt = Date.now();
+      pollFailing = false; lastApiError = "";
       updateSyncLabel();
       const before = dataSignature();
       mergeServerData(serverProducts);
@@ -945,7 +1044,7 @@ async function pollOnce(){
   }
 }
 document.addEventListener("visibilitychange", () => {
-  if(!document.hidden && apiUrl){ noteActivity(); pollOnce(); }
+  if(!document.hidden && apiUrl){ resumedAt = Date.now(); pollFailing = false; noteActivity(); pollOnce(); }
 });
 
 function exportCsv(){
