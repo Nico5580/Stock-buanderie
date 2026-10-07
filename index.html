@@ -326,7 +326,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v4.6 · 7 oct. 2026";
+const APP_VERSION = "v5.0 · 7 oct. 2026";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -352,7 +352,15 @@ const HISTORY_USERS = ["Nicolas", "Anna"];
 // n'empêche pas quelqu'un de lire le fichier pour le contourner.
 const ADMIN_PIN = "1282";
 
-let apiUrl = localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL;
+// ---- Base de données Firebase (temps réel) -----------------------------
+// Remplace Google Sheets + Apps Script pour la synchro : les modifications
+// arrivent sur les autres appareils en moins d'une seconde (flux SSE), les
+// écritures sont confirmées par le serveur (réponse lisible, pas de no-cors).
+// Tant que l'adresse n'est pas renseignée, l'ancienne synchro reste utilisée.
+const FB_URL = (localStorage.getItem("stock-buanderie-fburl") || "__FB_URL__").replace(/\/+$/, "");
+const USE_FB = /^https?:\/\//.test(FB_URL);
+
+let apiUrl = USE_FB ? FB_URL : (localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL);
 let syncPollTimer = null;
 
 function getUsername(){
@@ -588,9 +596,10 @@ const SHEET_ID = "1-95zEFbRVItLUfUQJT-uVwz48dHZzqh2-4GKWPXNG7A";
 const SHEET_TAB = "Stock";
 const GVIZ_TIMEOUT_MS = 8000;
 let gvizBlockedUntil = 0;   // après un échec, on n'insiste pas pendant 1 min
-function gvizGet(){
+function gvizGet(force){
   // uniquement pour la feuille d'origine : un autre script = une autre feuille
-  if(apiUrl !== DEFAULT_API_URL || Date.now() < gvizBlockedUntil) return Promise.resolve(null);
+  // (force : lecture ponctuelle pour la migration vers Firebase)
+  if((!force && apiUrl !== DEFAULT_API_URL) || Date.now() < gvizBlockedUntil) return Promise.resolve(null);
   return new Promise(resolve => {
     const cb = "__gv" + Math.random().toString(36).slice(2);
     const s = document.createElement("script");
@@ -649,7 +658,195 @@ async function apiGetFast(){
   return await apiGet();
 }
 
+// ---- Firebase : lecture, écriture, historique, migration -----------------
+// Clé d'un produit : son nom, rendu compatible avec les clés Firebase
+// (interdit : . $ # [ ] /). Le vrai nom est aussi stocké dans la valeur.
+function fbKey(name){
+  return encodeURIComponent(String(name)).replace(/\./g, "%2E");
+}
+function fbPath(name){
+  return "/products/" + encodeURIComponent(fbKey(name)) + ".json";
+}
+function fbRowOf(v){
+  return {
+    name: String(v.name),
+    base: Number(v.base) || 0,
+    target: (v.target === null || v.target === undefined || v.target === "") ? null : Number(v.target)
+  };
+}
+let fbKnownNames = new Set(); // produits vus sur le serveur (distingue ajout / maj dans l'historique)
+
+async function fbFetchJson(path, opts){
+  const ctrl = new AbortController();
+  const killer = setTimeout(() => ctrl.abort(), GET_TIMEOUT_MS);
+  try{
+    const res = await fetch(FB_URL + path, Object.assign({cache:"no-store", signal: ctrl.signal}, opts || {}));
+    if(!res.ok){
+      lastApiError = res.status === 401 || res.status === 403 ? "accès refusé par la base de données"
+        : "base de données : erreur " + res.status;
+      return {ok:false, data:null};
+    }
+    return {ok:true, data: await res.json()};
+  } finally { clearTimeout(killer); }
+}
+
+async function legacyScriptGet(){
+  const ctrl = new AbortController();
+  const killer = setTimeout(() => ctrl.abort(), GET_TIMEOUT_MS);
+  try{
+    const res = await fetch(DEFAULT_API_URL + "?_=" + Date.now(), {cache:"no-store", signal: ctrl.signal});
+    const data = await res.json();
+    return (data && data.ok) ? data.products : null;
+  }catch(e){ return null; }
+  finally{ clearTimeout(killer); }
+}
+
+// Première ouverture après le passage à Firebase : la base est vide, on y
+// copie une fois le contenu de la feuille Google (première ligne de chaque
+// nom). Le drapeau meta/migrated empêche toute nouvelle copie ensuite.
+async function fbMigrateIfNeeded(){
+  const flag = await fbFetchJson("/meta/migrated.json?_=" + Date.now());
+  if(!flag.ok || flag.data === true) return null;
+  let src = await gvizGet(true);
+  if(!src) src = await legacyScriptGet();
+  if(!src || !src.length) return null;
+  const seen = {}, upd = {}, rows = [];
+  src.forEach(p => {
+    if(seen[p.name]) return;
+    seen[p.name] = 1;
+    rows.push(p);
+    upd["products/" + fbKey(p.name)] = {name:p.name, base:p.base, target:p.target};
+  });
+  upd["meta/migrated"] = true;
+  const r = await fetch(FB_URL + "/.json", {method:"PATCH", body: JSON.stringify(upd)});
+  if(!r.ok){ lastApiError = "migration impossible (erreur " + r.status + ")"; return null; }
+  return rows;
+}
+
+async function fbGet(){
+  try{
+    const r = await fbFetchJson("/products.json?_=" + Date.now());
+    if(!r.ok) return null;
+    const out = [];
+    const data = r.data;
+    if(data && typeof data === "object"){
+      Object.keys(data).sort().forEach(k => {
+        const v = data[k];
+        if(v && v.name !== undefined && v.name !== "") out.push(fbRowOf(v));
+      });
+    }
+    if(out.length === 0){
+      // base vide : première utilisation → migration. Si elle échoue, on
+      // signale une panne plutôt que de renvoyer « liste vide » (qui
+      // effacerait les produits affichés).
+      const migrated = await fbMigrateIfNeeded();
+      if(migrated){ fbKnownNames = new Set(migrated.map(p => p.name)); return migrated; }
+      const flag = await fbFetchJson("/meta/migrated.json?_=" + Date.now());
+      if(!flag.ok || flag.data !== true){ if(!lastApiError) lastApiError = "migration des données impossible"; return null; }
+    }
+    fbKnownNames = new Set(out.map(p => p.name));
+    return out;
+  }catch(e){
+    lastApiError = (e && e.name === "AbortError") ? "la base de données ne répond pas (délai dépassé)" : "réseau";
+    return null;
+  }
+}
+
+async function fbSend(payload){
+  const path = fbPath(payload.name);
+  let res;
+  if(payload.action === "delete"){
+    res = await fetch(FB_URL + path, {method:"DELETE", keepalive:true});
+  } else {
+    const t = payload.target;
+    const body = {
+      name: String(payload.name),
+      base: Number(payload.base) || 0,
+      target: (t === null || t === undefined || t === "") ? null : Number(t)
+    };
+    res = await fetch(FB_URL + path, {method:"PUT", keepalive:true, body: JSON.stringify(body)});
+  }
+  if(!res.ok){
+    lastApiError = res.status === 401 || res.status === 403 ? "accès refusé par la base de données" : "base de données : erreur " + res.status;
+    throw new Error("http " + res.status);
+  }
+  // journal (sans bloquer ni faire échouer l'écriture)
+  let action = "suppression";
+  if(payload.action !== "delete") action = fbKnownNames.has(payload.name) ? "maj" : "ajout";
+  fbKnownNames[payload.action === "delete" ? "delete" : "add"](payload.name);
+  const entry = {
+    t: {".sv": "timestamp"},
+    user: (payload.user && String(payload.user).trim()) || "Inconnu",
+    action: action,
+    name: String(payload.name)
+  };
+  if(payload.action !== "delete"){
+    entry.base = Number(payload.base) || 0;
+    if(payload.target !== null && payload.target !== undefined && payload.target !== "") entry.target = Number(payload.target);
+  }
+  fetch(FB_URL + "/log.json", {method:"POST", keepalive:true, body: JSON.stringify(entry)}).catch(() => {});
+}
+
+async function fbGetLog(limit){
+  try{
+    const q = "?orderBy=" + encodeURIComponent('"$key"') + "&limitToLast=" + (limit || 200);
+    const r = await fbFetchJson("/log.json" + q);
+    if(!r.ok) return null;
+    const data = r.data || {};
+    return Object.keys(data).sort().reverse().map(k => {
+      const e = data[k] || {};
+      const d = new Date(e.t);
+      return {
+        timestamp: isNaN(d) ? String(e.t || "") : d.toISOString(),
+        user: String(e.user || "Inconnu"),
+        action: String(e.action || ""),
+        name: String(e.name || ""),
+        base: (e.base === undefined || e.base === null) ? null : Number(e.base),
+        target: (e.target === undefined || e.target === null) ? null : Number(e.target)
+      };
+    });
+  }catch(e){ return null; }
+}
+
+async function fbSeed(list){
+  const upd = {};
+  const seen = {};
+  list.forEach(p => {
+    if(seen[p.name]) return;
+    seen[p.name] = 1;
+    upd["products/" + fbKey(p.name)] = {name:p.name, base:Number(p.base) || 0, target:(p.target === null || p.target === undefined || p.target === "") ? null : Number(p.target)};
+  });
+  upd["meta/migrated"] = true;
+  try{ await fetch(FB_URL + "/.json", {method:"PATCH", body: JSON.stringify(upd)}); }catch(e){ /* ignore */ }
+}
+
+// Flux temps réel : le serveur pousse chaque changement, on relit aussitôt.
+// (Les iPhone coupent la connexion en arrière-plan : on la rouvre au retour.)
+let fbStream = null, fbStreamOk = false, pollAgain = false;
+function fbStopStream(){
+  if(fbStream){ try{ fbStream.close(); }catch(e){} }
+  fbStream = null; fbStreamOk = false;
+}
+function fbOnStream(){
+  if(document.hidden) return;
+  if(pollBusy){ pollAgain = true; return; }
+  pollOnce();
+}
+function fbStartStream(){
+  fbStopStream();
+  if(!USE_FB || typeof EventSource === "undefined") return;
+  try{
+    const es = new EventSource(FB_URL + "/products.json");
+    fbStream = es;
+    es.onopen = () => { fbStreamOk = true; };
+    es.addEventListener("put", fbOnStream);
+    es.addEventListener("patch", fbOnStream);
+    es.onerror = () => { fbStreamOk = false; };
+  }catch(e){ fbStreamOk = false; }
+}
+
 async function apiGet(){
+  if(USE_FB) return fbGet();
   if(!apiUrl) return null;
   // Délai maximum : sans lui, une requête qui reste bloquée (iPhone remis en
   // veille, réponse Google très lente) ne se termine jamais, le verrou du
@@ -676,6 +873,7 @@ async function apiGet(){
 
 async function apiGetLog(limit){
   if(!apiUrl) return null;
+  if(USE_FB) return fbGetLog(limit);
   try{
     const sep = apiUrl.includes("?") ? "&" : "?";
     const res = await fetch(apiUrl + sep + "action=log&limit=" + (limit || 200) + "&_=" + Date.now(), {method:"GET", cache:"no-store"});
@@ -704,6 +902,7 @@ function queueWrite(payload){
   writeQueue = writeQueue.filter(q => q.name !== payload.name);
   writeQueue.push(payload);
   saveQueue();
+  if(USE_FB) scheduleFlush(2500); // nouvelle tentative rapide
   render(); // refresh the "en attente" badge in the status line right away
 }
 
@@ -727,6 +926,10 @@ writeQueue.forEach(q => {
 
 async function sendToServer(payload){
   if(!apiUrl) return false;
+  if(USE_FB){
+    try{ await fbSend(payload); return true; }
+    catch(e){ if(!lastApiError || e.message.indexOf("http") !== 0) lastApiError = "réseau"; return false; }
+  }
   try{
     // no-cors: Apps Script doesn't send CORS headers on POST responses, so
     // we fire the write without trying to read the (opaque) response.
@@ -786,6 +989,11 @@ function writeMatches(products, payload){
 
 async function sendAndVerify(payload, isStillCurrent){
   const stillCurrent = () => !isStillCurrent || isStillCurrent();
+  if(USE_FB){
+    // la réponse de Firebase est lisible : « ok » = écrit, pas besoin de relire
+    if(!stillCurrent()) return true;
+    return await sendToServer(payload);
+  }
   for(let attempt = 0; attempt < MAX_VERIFY_ATTEMPTS; attempt++){
     if(!stillCurrent()) return true; // a newer write took over — nothing left to confirm here
     const sent = await sendToServer(payload);
@@ -878,12 +1086,19 @@ async function flushQueue(){
     safeRender();
   } finally {
     flushing = false;
+    if(USE_FB && writeQueue.length) scheduleFlush(3000);
   }
+}
+let flushTimer = null;
+function scheduleFlush(ms){
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flushQueue, ms);
 }
 window.addEventListener("online", flushQueue);
 
 async function apiSeed(list){
   if(!apiUrl) return;
+  if(USE_FB) return fbSeed(list);
   try{
     await fetch(apiUrl, {
       method:"POST",
@@ -968,6 +1183,8 @@ const POLL_FAST_WINDOW_MS = 20000;
 let lastActivityAt = 0;
 function noteActivity(){ lastActivityAt = Date.now(); }
 function currentPollDelay(){
+  if(USE_FB && writeQueue.length) return 3000; // envoi en attente : on réessaie vite
+  if(USE_FB) return fbStreamOk ? 15000 : (Date.now() - lastActivityAt < POLL_FAST_WINDOW_MS ? 3000 : 5000);
   const fast = Date.now() - lastActivityAt < POLL_FAST_WINDOW_MS;
   if(lastSource === "script") return fast ? 6000 : 10000;
   return fast ? 2000 : 4000;
@@ -985,6 +1202,7 @@ async function pollLoop(id){
 }
 function startPolling(){
   clearTimeout(syncPollTimer);
+  if(USE_FB && apiUrl) fbStartStream();
   const id = ++pollLoopId;
   if(!apiUrl) return;
   syncPollTimer = setTimeout(() => pollLoop(id), currentPollDelay());
@@ -1041,9 +1259,11 @@ async function pollOnce(){
     }
   } finally {
     pollBusy = false;
+    if(pollAgain){ pollAgain = false; setTimeout(pollOnce, 0); }
   }
 }
 document.addEventListener("visibilitychange", () => {
+  if(USE_FB){ if(document.hidden) fbStopStream(); else if(apiUrl) fbStartStream(); }
   if(!document.hidden && apiUrl){ resumedAt = Date.now(); pollFailing = false; noteActivity(); pollOnce(); }
 });
 
@@ -1055,6 +1275,33 @@ function exportCsv(){
 function openSyncModal(){
   const backdrop = document.getElementById("modalBackdrop");
   const box = document.getElementById("modalBox");
+  if(USE_FB){
+    box.innerHTML = `
+      <p>Synchronisation partagée</p>
+      <div class="modal-sub">Synchronisation en temps réel active (Firebase). Rien à configurer.</div>
+      <div class="modal-actions">
+        <button class="modal-cancel" id="mCancel" style="width:100%;">Fermer</button>
+      </div>
+      <div class="modal-actions" style="margin-top:8px;">
+        <button class="modal-cancel" id="mForceSync" style="width:100%;">Forcer synchro complète (renvoyer les ${products.length} produits)</button>
+      </div>
+      <div class="modal-actions" style="margin-top:8px;">
+        <button class="modal-cancel" id="mExportCsv" style="width:100%;">Exporter en CSV (sauvegarde locale)</button>
+      </div>`;
+    backdrop.classList.add("show");
+    document.getElementById("mCancel").onclick = () => backdrop.classList.remove("show");
+    document.getElementById("mExportCsv").onclick = () => { exportCsv(); backdrop.classList.remove("show"); };
+    document.getElementById("mForceSync").onclick = async () => {
+      showToast("Envoi en cours…");
+      await fbSeed(products.map(p => ({name:p.name, base:p.base, target:p.target})));
+      const sp = await fbGet();
+      if(sp){ mergeServerData(sp); saveData(true); showToast("Tous les produits envoyés"); }
+      else showToast("Échec de l'envoi");
+      backdrop.classList.remove("show");
+      render(); renderOrderBadge();
+    };
+    return;
+  }
   box.innerHTML = `
     <p>Synchronisation partagée</p>
     <div class="modal-sub">Colle ici l'URL de ton Google Apps Script (se terminant par /exec). Laisse vide pour rester en mode local.</div>
@@ -1210,7 +1457,7 @@ async function openHistorySheet(){
   listEl.innerHTML = `<div class="sheet-empty">Chargement…</div>`;
   const log = await apiGetLog(200);
   if(!log){
-    listEl.innerHTML = `<div class="sheet-empty">Impossible de charger l'historique — vérifie que le script backend a bien été redéployé.</div>`;
+    listEl.innerHTML = `<div class="sheet-empty">Impossible de charger l'historique pour le moment.</div>`;
     return;
   }
   if(log.length === 0){
