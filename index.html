@@ -326,7 +326,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v4.4 · 6 oct. 2026";
+const APP_VERSION = "v4.5 · 7 oct. 2026";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -573,17 +573,24 @@ function restantOf(p){
   return p.base;
 }
 
+const GET_TIMEOUT_MS = 20000;
 async function apiGet(){
   if(!apiUrl) return null;
+  // Délai maximum : sans lui, une requête qui reste bloquée (iPhone remis en
+  // veille, réponse Google très lente) ne se termine jamais, le verrou du
+  // sondage reste fermé et l'app ne se met plus à jour jusqu'au redémarrage.
+  const ctrl = new AbortController();
+  const killer = setTimeout(() => ctrl.abort(), GET_TIMEOUT_MS);
   try{
     // cache:"no-store" + paramètre unique : empêche le navigateur (surtout Safari
     // sur iPhone) de reservir une ancienne réponse mise en cache au lieu de
     // demander les données actuelles au serveur.
     const sep = apiUrl.includes("?") ? "&" : "?";
-    const res = await fetch(apiUrl + sep + "_=" + Date.now(), {method:"GET", cache:"no-store"});
+    const res = await fetch(apiUrl + sep + "_=" + Date.now(), {method:"GET", cache:"no-store", signal: ctrl.signal});
     const data = await res.json();
     if(data && data.ok) return data.products;
-  }catch(e){ /* offline or misconfigured — silently fall back */ }
+  }catch(e){ /* offline, misconfigured or timed out — silently fall back */ }
+  finally{ clearTimeout(killer); }
   return null;
 }
 
@@ -800,8 +807,11 @@ async function apiSeed(list){
 
 function mergeServerData(serverProducts){
   if(!serverProducts) return;
+  // Si la feuille contient deux lignes au même nom (doublon), on retient la
+  // PREMIÈRE : c'est celle que le serveur met à jour à chaque écriture. Retenir
+  // la dernière affichait une ancienne valeur sur les autres appareils.
   const byName = {};
-  serverProducts.forEach(sp => byName[sp.name] = sp);
+  serverProducts.forEach(sp => { if(!(sp.name in byName)) byName[sp.name] = sp; });
   products.forEach(p => {
     const sp = byName[p.name];
     // Ne jamais écraser une valeur locale dont l'envoi est en cours ou en
@@ -893,12 +903,36 @@ function startPolling(){
   syncPollTimer = setTimeout(() => pollLoop(id), currentPollDelay());
 }
 let pollBusy = false;
+let pollStartedAt = 0;
+let lastSyncOkAt = 0;   // dernière lecture serveur réussie
+function updateSyncLabel(){
+  const el = document.getElementById("syncLive");
+  if(!el) return;
+  if(!apiUrl){ el.className = "sync-status"; el.textContent = "○ Mode local"; return; }
+  const age = lastSyncOkAt ? Math.round((Date.now() - lastSyncOkAt) / 1000) : null;
+  if(age !== null && age <= 25){
+    el.className = "sync-status on"; el.textContent = "● Synchronisé";
+  } else if(age === null){
+    el.className = "sync-status"; el.textContent = "○ Synchro en cours…";
+  } else {
+    el.className = "sync-status"; el.style.color = "var(--warn)";
+    el.textContent = age < 90 ? `⚠ Pas de synchro depuis ${age} s` : `⚠ Pas de synchro depuis ${Math.round(age / 60)} min`;
+    return;
+  }
+  el.style.color = "";
+}
+setInterval(updateSyncLabel, 2000);
 async function pollOnce(){
-  if(document.hidden || pollBusy) return;
+  if(document.hidden) return;
+  // verrou déjà pris depuis trop longtemps : la requête précédente est perdue
+  if(pollBusy && Date.now() - pollStartedAt < GET_TIMEOUT_MS + 5000) return;
   pollBusy = true;
+  pollStartedAt = Date.now();
   try{
     const serverProducts = await apiGet();
     if(serverProducts){
+      lastSyncOkAt = Date.now();
+      updateSyncLabel();
       const before = dataSignature();
       mergeServerData(serverProducts);
       saveData(true);
@@ -1146,12 +1180,13 @@ function render(){
   visible = visible.slice().sort((a, b) => a.name.localeCompare(b.name, "fr", {sensitivity: "base"}));
 
   const status = apiUrl
-    ? `<span class="sync-status on">● Synchronisé</span>`
-    : `<span class="sync-status">○ Mode local</span>`;
+    ? `<span class="sync-status on" id="syncLive">● Synchronisé</span>`
+    : `<span class="sync-status" id="syncLive">○ Mode local</span>`;
   const queueBadge = writeQueue.length > 0
     ? ` <span class="sync-status" style="color:var(--warn);">⏳ ${writeQueue.length} en attente</span>`
     : "";
   sub.innerHTML = `${products.length} produits · ${visible.length} affichés &nbsp;${status}${queueBadge}`;
+  updateSyncLabel();
 
   if(visible.length === 0){
     list.innerHTML = `<div class="empty">Aucun produit ne correspond</div>`;
