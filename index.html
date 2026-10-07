@@ -326,7 +326,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.0 · 7 oct. 2026";
+const APP_VERSION = "v5.0 · 7 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -357,7 +357,7 @@ const ADMIN_PIN = "1282";
 // arrivent sur les autres appareils en moins d'une seconde (flux SSE), les
 // écritures sont confirmées par le serveur (réponse lisible, pas de no-cors).
 // Tant que l'adresse n'est pas renseignée, l'ancienne synchro reste utilisée.
-const FB_URL = (localStorage.getItem("stock-buanderie-fburl") || "__FB_URL__").replace(/\/+$/, "");
+const FB_URL = (localStorage.getItem("stock-buanderie-fburl") || "https://stock-buanderie-default-rtdb.europe-west1.firebasedatabase.app").replace(/\/+$/, "");
 const USE_FB = /^https?:\/\//.test(FB_URL);
 
 let apiUrl = USE_FB ? FB_URL : (localStorage.getItem(API_URL_KEY) || DEFAULT_API_URL);
