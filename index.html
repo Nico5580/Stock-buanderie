@@ -327,7 +327,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.3 · 13 oct. 2026 · temps réel";
+const APP_VERSION = "v5.4 · 13 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -2019,15 +2019,15 @@ function entriesDataset(log){
   });
   out.length = 0;
   grouped.forEach(g => out.push(g));
-  out.reverse();
-  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, Array.from(o.users).join(", "), Array.from(o.notes).concat(o.n > 1 ? [o.n + " ajouts"] : []).join(" · "), ""]);
+  out.sort((x, y) => x.e.name.localeCompare(y.e.name, "fr", {sensitivity:"base"}) || ts(x.e) - ts(y.e));
+  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, Array.from(o.users).join(", "), Array.from(o.notes).concat(o.n > 1 ? [o.n + " ajouts"] : []).join(" · ")]);
   const total = out.reduce((a, o) => a + o.plus, 0);
   const days = new Set(rows.map(r => r[0])).size;
   return {
     kind: "in",
-    title: "Contrôle de livraison — entrées de stock",
+    title: "Entrées de stock",
     file: "entrees-buanderie-" + todayIso(),
-    header: ["Date", "Produit", "Avant", "Entrée", "Après", "Qui", "Remarque", "Constaté à la livraison"],
+    header: ["Date", "Produit", "Avant", "Entrée", "Après", "Qui", "Remarque"],
     rows,
     total,
     summary: rows.length ? `${rows.length} produits · ${total} unités ajoutées · ${days} jour(s)` + (unknown ? ` · ${unknown} produit(s) sans stock antérieur connu ignoré(s)` : "") : "Aucune entrée de stock sur la période",
@@ -2080,31 +2080,24 @@ function deliveryHtml(ds){
 function entriesHtml(ds){
   const who = getUsername() || "—";
   const label = {today: "aujourd'hui", week: "7 derniers jours", all: "tout l'historique"}[entriesPeriod];
-  const cell = "padding:9px 5px; border-bottom:1px solid #999;";
-  const box = '<span style="display:inline-block; width:15px; height:15px; border:1.5px solid #333; vertical-align:middle;"></span>';
-  const th = (t, a) => `<th style="text-align:${a || "left"}; border-bottom:2px solid #333; padding:6px 5px; font-size:11.5px;">${t}</th>`;
+  const cell = "padding:7px 5px; border-bottom:1px solid #ccc;";
+  const th = (t, a) => `<th style="text-align:${a || "left"}; border-bottom:2px solid #333; padding:6px 5px;">${t}</th>`;
   const showDate = new Set(ds.rows.map(r => r[0])).size > 1;
   const body = ds.rows.map(r => `<tr style="page-break-inside:avoid;">
-      <td style="${cell} text-align:center;">${box}</td>
       ${showDate ? `<td style="${cell} color:#555;">${esc(r[0])}</td>` : ""}
-      <td style="${cell}">${esc(r[1])}${r[6] ? `<br><span style="font-size:10.5px; color:#777;">${esc(r[6])}</span>` : ""}</td>
-      <td style="${cell} text-align:right; color:#555;">${esc(r[2])}</td>
-      <td style="${cell} text-align:right; font-weight:700;">${esc(r[3])}</td>
-      <td style="${cell} text-align:right; color:#555;">${esc(r[4])}</td>
-      <td style="${cell} border-left:1px solid #999; width:80px;"></td>
+      <td style="${cell}">${esc(r[1])}${r[6] ? ` <span style="font-size:10.5px; color:#777;">(${esc(r[6])})</span>` : ""}</td>
+      <td style="${cell} text-align:right; font-weight:700; font-size:14px;">${esc(r[3])}</td>
+      <td style="${cell} text-align:right; color:#555;">${esc(r[2])} → ${esc(r[4])}</td>
     </tr>`).join("");
-  const line = (l) => `<div style="flex:1; min-width:170px;"><span style="font-size:11.5px;">${l}</span><div style="border-bottom:1px solid #333; height:22px;"></div></div>`;
   return `
-    <h2 style="font-family:sans-serif; margin:0 0 4px;">Contrôle de livraison — Buanderie EAFC</h2>
-    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 4px;">Entrées de stock : ${esc(label)} · exporté le ${esc(fmtDateTime(new Date()))} par ${esc(who)}</p>
+    <h2 style="font-family:sans-serif; margin:0 0 4px;">Entrées de stock — Buanderie EAFC</h2>
+    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 4px;">Période : ${esc(label)} · exporté le ${esc(fmtDateTime(new Date()))} par ${esc(who)}</p>
     <p style="font-family:sans-serif; font-size:13px; margin:0 0 12px;"><b>${esc(ds.summary)}</b></p>
-    <div style="font-family:sans-serif; display:flex; gap:18px; flex-wrap:wrap; margin:0 0 14px;">${line("Fournisseur")}${line("N° bon de livraison")}</div>
     <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:12.5px;">
-      <thead><tr>${th("✔", "center")}${showDate ? th("Date") : ""}${th("Produit")}${th("Avant", "right")}${th("Entrée", "right")}${th("Après", "right")}${th("Constaté")}</tr></thead>
+      <thead><tr>${showDate ? th("Date") : ""}${th("Produit")}${th("Entrée", "right")}${th("Stock avant → après", "right")}</tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td colspan="${showDate ? 4 : 3}" style="padding:8px 5px; font-weight:700; text-align:right;">Total entré</td><td style="padding:8px 5px; font-weight:700; text-align:right;">+${ds.total}</td><td></td><td></td></tr></tfoot>
-    </table>
-    <div style="font-family:sans-serif; display:flex; gap:18px; flex-wrap:wrap; margin:22px 0 0;">${line("Contrôlé par")}${line("Signature")}</div>`;
+      <tfoot><tr><td colspan="${showDate ? 2 : 1}" style="padding:8px 5px; font-weight:700; text-align:right;">Total entré</td><td style="padding:8px 5px; font-weight:700; text-align:right; font-size:14px;">+${ds.total}</td><td></td></tr></tfoot>
+    </table>`;
 }
 
 function reportHtml(ds){
@@ -2219,7 +2212,7 @@ function openExportSheet(){
   body.innerHTML =
     group("liv", "Feuille de contrôle de livraison", "Produits à commander avec cases à cocher, colonnes Reçu / Écart / Remarque et zone de signature.") +
     group("inv", "Inventaire actuel", "Produit, stock, cible, quantité à commander et état.") +
-    (canHist ? group("in", "Entrées de stock (vérification de livraison)", "Seulement les plus : produit, stock avant, entrée, stock après, avec cases à cocher et colonne « Constaté ». Plusieurs ajouts le même jour sont totalisés.", periodSel) + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
+    (canHist ? group("in", "Entrées de stock (à comparer au bon de livraison)", "Seulement les plus, par produit (ordre alphabétique) : entrée, stock avant → après, total. Plusieurs ajouts le même jour sont totalisés.", periodSel) + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
   const ps = document.getElementById("entriesPeriod");
   if(ps){ ps.value = entriesPeriod; ps.onchange = () => { entriesPeriod = ps.value; }; }
   body.querySelectorAll("[data-act]").forEach(btn => {
