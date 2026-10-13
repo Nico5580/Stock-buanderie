@@ -327,7 +327,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.5 · 13 oct. 2026 · temps réel";
+const APP_VERSION = "v5.6 · 13 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -1967,6 +1967,14 @@ function entriesDataset(log){
   const out = [];
   const since = periodStart();
   let unknown = 0;
+  // Renommage = ajout du nouveau nom + suppression de l'ancien (même qui, même stock, à quelques secondes).
+  // Ce n'est pas une entrée de marchandise : on repère ces paires pour les ignorer.
+  const tmp = {}, dels = [];
+  asc.forEach(e => {
+    if(e.action === "suppression"){ if(tmp[e.name] !== undefined) dels.push({t: ts(e), user: e.user, base: tmp[e.name]}); delete tmp[e.name]; }
+    else if(e.base != null && !isNaN(e.base)) tmp[e.name] = Number(e.base);
+  });
+  const isRename = e => e.action === "ajout" && dels.some(d => d.user === e.user && d.base === Number(e.base) && Math.abs(d.t - ts(e)) <= 120000);
   asc.forEach(e => {
     if(e.action === "suppression"){ delete last[e.name]; return; }
     if(e.base == null || isNaN(e.base)) return;
@@ -1974,7 +1982,7 @@ function entriesDataset(log){
     const now = Number(e.base);
     const inPeriod = ts(e) >= since;
     if(e.action === "ajout"){
-      if(now > 0 && inPeriod) out.push({e, avant: 0, plus: now, note: "nouveau produit"});
+      if(now > 0 && inPeriod && !isRename(e)) out.push({e, avant: 0, plus: now, note: "nouveau produit"});
     } else if(prev !== undefined){
       if(now > Number(prev) && inPeriod) out.push({e, avant: Number(prev), plus: now - Number(prev), note: ""});
     } else if(ts(e) >= since){
