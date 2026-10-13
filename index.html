@@ -327,7 +327,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.4 · 13 oct. 2026 · temps réel";
+const APP_VERSION = "v5.5 · 13 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -1848,8 +1848,6 @@ document.getElementById("closeOrder").addEventListener("click", closeOrderSheet)
 document.getElementById("sheetBackdrop").addEventListener("click", closeOrderSheet);
 
 document.getElementById("printOrder").addEventListener("click", () => {
-  const d = deliveryDataset();
-  if(d.rows.length) document.getElementById("printArea").innerHTML = deliveryHtml(d);
   window.print();
 });
 
@@ -1906,28 +1904,6 @@ function inventoryDataset(){
     summary: `${rows.length} produits · ${rupture} en rupture · ${bas} en stock bas · ${toBuy} à commander`,
     numCols: [1, 2, 3],
     rowState: r => r[4] === "Rupture" ? "rupture" : r[4] === "Stock bas" ? "bas" : ""
-  };
-}
-
-// Feuille de contrôle de livraison : ce qui est commandé (cible − stock),
-// avec des colonnes vides à remplir à la réception (reçu, écart, remarque).
-function deliveryDataset(){
-  const items = products
-    .map(p => ({p, toOrder: (p.target !== null && p.target !== "" && !isNaN(p.target)) ? (p.target - restantOf(p)) : 0}))
-    .filter(x => x.toOrder > 0)
-    .sort((a, b) => a.p.name.localeCompare(b.p.name, "fr", {sensitivity:"base"}));
-  const rows = items.map(({p, toOrder}) => [p.name, restantOf(p), p.target, toOrder, "", "", restantOf(p) + toOrder, ""]);
-  const units = items.reduce((a, x) => a + x.toOrder, 0);
-  return {
-    kind: "liv",
-    title: "Contrôle de livraison",
-    file: "livraison-buanderie-" + todayIso(),
-    header: ["Produit", "Stock actuel", "Cible", "Commandé", "Reçu", "Écart", "Stock après (attendu)", "Remarque"],
-    rows,
-    summary: rows.length ? `${rows.length} références · ${units} unités commandées` : "Rien à commander",
-    numCols: [1, 2, 3, 4, 5, 6],
-    rowState: () => "",
-    units
   };
 }
 
@@ -2020,88 +1996,43 @@ function entriesDataset(log){
   out.length = 0;
   grouped.forEach(g => out.push(g));
   out.sort((x, y) => x.e.name.localeCompare(y.e.name, "fr", {sensitivity:"base"}) || ts(x.e) - ts(y.e));
-  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, Array.from(o.users).join(", "), Array.from(o.notes).concat(o.n > 1 ? [o.n + " ajouts"] : []).join(" · ")]);
+  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, "+" + o.plus]);
   const total = out.reduce((a, o) => a + o.plus, 0);
   const days = new Set(rows.map(r => r[0])).size;
   return {
     kind: "in",
     title: "Entrées de stock",
     file: "entrees-buanderie-" + todayIso(),
-    header: ["Date", "Produit", "Avant", "Entrée", "Après", "Qui", "Remarque"],
+    header: ["Date", "Produit", "Entrée"],
     rows,
     total,
     summary: rows.length ? `${rows.length} produits · ${total} unités ajoutées · ${days} jour(s)` + (unknown ? ` · ${unknown} produit(s) sans stock antérieur connu ignoré(s)` : "") : "Aucune entrée de stock sur la période",
-    numCols: [2, 3, 4],
+    numCols: [2],
     rowState: () => ""
   };
 }
 
-function deliveryHtml(ds){
-  const who = getUsername() || "—";
-  const cell = "padding:9px 5px; border-bottom:1px solid #999;";
-  const box = '<span style="display:inline-block; width:15px; height:15px; border:1.5px solid #333; vertical-align:middle;"></span>';
-  const th = (t, a) => `<th style="text-align:${a || "left"}; border-bottom:2px solid #333; padding:6px 5px; font-size:11.5px;">${t}</th>`;
-  const body = ds.rows.map(r => `<tr style="page-break-inside:avoid;">
-      <td style="${cell} text-align:center;">${box}</td>
-      <td style="${cell}">${esc(r[0])}</td>
-      <td style="${cell} text-align:right; color:#555;">${esc(r[1])}</td>
-      <td style="${cell} text-align:right; color:#555;">${esc(r[2])}</td>
-      <td style="${cell} text-align:right; font-weight:700;">${esc(r[3])}</td>
-      <td style="${cell} border-left:1px solid #999; width:62px;"></td>
-      <td style="${cell} width:48px;"></td>
-      <td style="${cell} text-align:right; color:#555;">${esc(r[6])}</td>
-      <td style="${cell} border-left:1px solid #999; width:120px;"></td>
-    </tr>`).join("");
-  const line = (label) => `<div style="flex:1; min-width:170px;"><span style="font-size:11.5px;">${label}</span><div style="border-bottom:1px solid #333; height:22px;"></div></div>`;
-  return `
-    <h2 style="font-family:sans-serif; margin:0 0 4px;">Contrôle de livraison — Buanderie EAFC</h2>
-    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 4px;">Commande établie le ${esc(fmtDateTime(new Date()))} par ${esc(who)}</p>
-    <p style="font-family:sans-serif; font-size:13px; margin:0 0 12px;"><b>${esc(ds.summary)}</b></p>
-    <div style="font-family:sans-serif; display:flex; gap:18px; flex-wrap:wrap; margin:0 0 14px;">
-      ${line("Fournisseur")}${line("N° bon de livraison")}${line("Date de livraison")}
-    </div>
-    <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:12.5px;">
-      <thead><tr>
-        ${th("✔", "center")}${th("Produit")}${th("Stock", "right")}${th("Cible", "right")}${th("Commandé", "right")}${th("Reçu", "right")}${th("Écart", "right")}${th("Stock après", "right")}${th("Remarque")}
-      </tr></thead>
-      <tbody>${body}</tbody>
-      <tfoot><tr>
-        <td colspan="4" style="padding:8px 5px; font-weight:700; text-align:right;">Total commandé</td>
-        <td style="padding:8px 5px; font-weight:700; text-align:right;">${ds.units}</td>
-        <td style="padding:8px 5px; border:1px solid #999;"></td><td style="padding:8px 5px; border:1px solid #999;"></td><td></td><td></td>
-      </tr></tfoot>
-    </table>
-    <div style="font-family:sans-serif; display:flex; gap:18px; flex-wrap:wrap; margin:22px 0 0;">
-      ${line("Contrôlé par")}${line("Signature")}
-    </div>
-    <p style="font-family:sans-serif; font-size:11px; color:#555; margin:14px 0 0;">Écart = reçu − commandé. « Stock après » = stock actuel + commandé : à saisir dans l'appli une fois la livraison validée.</p>`;
-}
-
 function entriesHtml(ds){
-  const who = getUsername() || "—";
   const label = {today: "aujourd'hui", week: "7 derniers jours", all: "tout l'historique"}[entriesPeriod];
-  const cell = "padding:7px 5px; border-bottom:1px solid #ccc;";
-  const th = (t, a) => `<th style="text-align:${a || "left"}; border-bottom:2px solid #333; padding:6px 5px;">${t}</th>`;
+  const cell = "padding:8px 6px; border-bottom:1px solid #ccc;";
+  const th = (t, a) => `<th style="text-align:${a || "left"}; border-bottom:2px solid #333; padding:6px;">${t}</th>`;
   const showDate = new Set(ds.rows.map(r => r[0])).size > 1;
   const body = ds.rows.map(r => `<tr style="page-break-inside:avoid;">
       ${showDate ? `<td style="${cell} color:#555;">${esc(r[0])}</td>` : ""}
-      <td style="${cell}">${esc(r[1])}${r[6] ? ` <span style="font-size:10.5px; color:#777;">(${esc(r[6])})</span>` : ""}</td>
-      <td style="${cell} text-align:right; font-weight:700; font-size:14px;">${esc(r[3])}</td>
-      <td style="${cell} text-align:right; color:#555;">${esc(r[2])} → ${esc(r[4])}</td>
+      <td style="${cell}">${esc(r[1])}</td>
+      <td style="${cell} text-align:right; font-weight:700; font-size:15px;">${esc(r[2])}</td>
     </tr>`).join("");
   return `
     <h2 style="font-family:sans-serif; margin:0 0 4px;">Entrées de stock — Buanderie EAFC</h2>
-    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 4px;">Période : ${esc(label)} · exporté le ${esc(fmtDateTime(new Date()))} par ${esc(who)}</p>
-    <p style="font-family:sans-serif; font-size:13px; margin:0 0 12px;"><b>${esc(ds.summary)}</b></p>
-    <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:12.5px;">
-      <thead><tr>${showDate ? th("Date") : ""}${th("Produit")}${th("Entrée", "right")}${th("Stock avant → après", "right")}</tr></thead>
+    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 12px;">Période : ${esc(label)} · exporté le ${esc(fmtDateTime(new Date()))}</p>
+    <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:13.5px;">
+      <thead><tr>${showDate ? th("Date") : ""}${th("Produit")}${th("Entrée", "right")}</tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td colspan="${showDate ? 2 : 1}" style="padding:8px 5px; font-weight:700; text-align:right;">Total entré</td><td style="padding:8px 5px; font-weight:700; text-align:right; font-size:14px;">+${ds.total}</td><td></td></tr></tfoot>
+      <tfoot><tr><td colspan="${showDate ? 2 : 1}" style="padding:10px 6px; font-weight:700; text-align:right;">Total entré</td><td style="padding:10px 6px; font-weight:700; text-align:right; font-size:15px;">+${ds.total}</td></tr></tfoot>
     </table>`;
 }
 
 function reportHtml(ds){
-  if(ds.kind === "liv") return deliveryHtml(ds);
   if(ds.kind === "in") return entriesHtml(ds);
   const who = getUsername() || "—";
   const th = ds.header.map((h, i) => `<th style="text-align:${ds.numCols.includes(i) ? "right" : "left"}; border-bottom:2px solid #333; padding:6px 5px;">${esc(h)}</th>`).join("");
@@ -2126,11 +2057,7 @@ function readableText(ds){
   }
   if(ds.kind === "in"){
     return ds.title + " — " + fmtDateTime(new Date()) + "\n" + ds.summary + "\n\n" +
-      ds.rows.map(r => `${r[0]} · ${r[1]} : ${r[2]} → ${r[4]} (${r[3]}) · ${r[5]}`).join("\n");
-  }
-  if(ds.kind === "liv"){
-    return ds.title + " — " + fmtDateTime(new Date()) + "\n" + ds.summary + "\n\n" +
-      ds.rows.map(r => `☐ ${r[0]} : ${r[3]} (stock ${r[1]} → ${r[6]})`).join("\n");
+      ds.rows.map(r => `${r[1]} : ${r[2]}`).join("\n");
   }
   return ds.title + " — " + fmtDateTime(new Date()) + "\n" + ds.summary + "\n\n" +
     ds.rows.map(r => `${r[0]} · ${r[1]} · ${r[2]} ${r[3]}` + (r[4] !== "" ? ` → stock ${r[4]}` : "") + (r[5] !== "" ? ` (${r[5]})` : "")).join("\n");
@@ -2167,11 +2094,6 @@ async function shareDataset(ds){
 
 async function getDataset(kind){
   if(kind === "inv") return inventoryDataset();
-  if(kind === "liv"){
-    const d = deliveryDataset();
-    if(!d.rows.length){ showToast("Rien à commander : pas de feuille de livraison"); return null; }
-    return d;
-  }
   if(!HISTORY_USERS.includes(getUsername())) return null;
   if(!apiUrl){ showToast("L'historique n'existe qu'en mode synchronisé"); return null; }
   showToast("Chargement de l'historique…");
@@ -2210,9 +2132,8 @@ function openExportSheet(){
       <option value="today">Aujourd'hui</option><option value="week">7 derniers jours</option><option value="all">Tout l'historique</option></select></div>`;
   const body = document.getElementById("exportBody");
   body.innerHTML =
-    group("liv", "Feuille de contrôle de livraison", "Produits à commander avec cases à cocher, colonnes Reçu / Écart / Remarque et zone de signature.") +
     group("inv", "Inventaire actuel", "Produit, stock, cible, quantité à commander et état.") +
-    (canHist ? group("in", "Entrées de stock (à comparer au bon de livraison)", "Seulement les plus, par produit (ordre alphabétique) : entrée, stock avant → après, total. Plusieurs ajouts le même jour sont totalisés.", periodSel) + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
+    (canHist ? group("in", "Entrées de stock (à comparer au bon de livraison)", "Seulement les quantités ajoutées, par produit : +10, +20… avec le total. Pas de stock restant.", periodSel) + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
   const ps = document.getElementById("entriesPeriod");
   if(ps){ ps.value = entriesPeriod; ps.onchange = () => { entriesPeriod = ps.value; }; }
   body.querySelectorAll("[data-act]").forEach(btn => {
