@@ -134,6 +134,7 @@
   }
   .stepper button:active{background:#e4ebf8;}
   .stepper button.plusn{width:42px; font-size:13px; border-left:1px solid var(--line);}
+  .stepper button.minusn{width:42px; font-size:13px; border-right:1px solid var(--line);}
   .stepper .count{
     min-width:34px; text-align:center; font-family:var(--mono);
     font-size:14px; border-left:1px solid var(--line); border-right:1px solid var(--line);
@@ -327,7 +328,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.6 · 13 oct. 2026 · temps réel";
+const APP_VERSION = "v5.7 · 14 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -1571,6 +1572,7 @@ function render(){
         <div style="display:flex; align-items:center;">
           <span class="stepper-label">Stock</span>
           <div class="stepper">
+            <button class="minusn" aria-label="retirer un nombre" title="Retirer un nombre">−N</button>
             <button class="minus" aria-label="moins">−</button>
             <span class="count restant-count">${restant}</span>
             <button class="plus" aria-label="plus">+</button>
@@ -1611,6 +1613,20 @@ function render(){
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
       showToast(`+${n} → stock ${p.base}`);
+    });
+    card.querySelector(".minusn").addEventListener("click", async () => {
+      if(p.base <= 0){ showToast("Stock déjà à 0"); return; }
+      const v = await customPrompt(`Combien retirer à "${esc(p.name)}" ?<br><small style="font-weight:400;color:#8a9497;">Stock actuel : ${p.base}</small>`, "");
+      if(v === null) return;
+      const n = parseInt(v, 10);
+      if(isNaN(n) || n <= 0){ showToast("Entre un nombre positif"); return; }
+      if(n > p.base){ showToast(`Impossible : il n'y en a que ${p.base}`); return; }
+      p.base -= n;
+      updateCard(liveCard(p), p);
+      saveDataDebounced();
+      renderOrderBadge();
+      apiUpdate(p.name, p.base, p.target);
+      showToast(`−${n} → stock ${p.base}`);
     });
     card.querySelector(".minus").addEventListener("click", async () => {
       if(p.base <= 0) return;
