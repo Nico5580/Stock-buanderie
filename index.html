@@ -133,6 +133,7 @@
     display:flex; align-items:center; justify-content:center;
   }
   .stepper button:active{background:#e4ebf8;}
+  .stepper button.plusn{width:42px; font-size:13px; border-left:1px solid var(--line);}
   .stepper .count{
     min-width:34px; text-align:center; font-family:var(--mono);
     font-size:14px; border-left:1px solid var(--line); border-right:1px solid var(--line);
@@ -326,7 +327,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.1 · 13 oct. 2026 · temps réel";
+const APP_VERSION = "v5.2 · 13 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -1573,6 +1574,7 @@ function render(){
             <button class="minus" aria-label="moins">−</button>
             <span class="count restant-count">${restant}</span>
             <button class="plus" aria-label="plus">+</button>
+            <button class="plusn" aria-label="ajouter un nombre" title="Ajouter un nombre">+N</button>
           </div>
         </div>
         <div class="target-wrap">
@@ -1597,6 +1599,18 @@ function render(){
       saveDataDebounced();
       renderOrderBadge();
       apiUpdate(p.name, p.base, p.target);
+    });
+    card.querySelector(".plusn").addEventListener("click", async () => {
+      const v = await customPrompt(`Combien ajouter à "${esc(p.name)}" ?<br><small style="font-weight:400;color:#8a9497;">Stock actuel : ${p.base}</small>`, "");
+      if(v === null) return;
+      const n = parseInt(v, 10);
+      if(isNaN(n) || n <= 0){ showToast("Entre un nombre positif"); return; }
+      p.base += n;
+      updateCard(liveCard(p), p);
+      saveDataDebounced();
+      renderOrderBadge();
+      apiUpdate(p.name, p.base, p.target);
+      showToast(`+${n} → stock ${p.base}`);
     });
     card.querySelector(".minus").addEventListener("click", async () => {
       if(p.base <= 0) return;
@@ -1982,8 +1996,21 @@ function entriesDataset(log){
     }
     last[e.name] = now;
   });
+  // regroupe par jour et par produit : plusieurs ajouts le même jour = une seule ligne totalisée
+  const grouped = [];
+  const idx = {};
+  out.forEach(o => {
+    const k = fmtDay(o.e.timestamp) + "|" + o.e.name;
+    if(idx[k] === undefined){ idx[k] = grouped.length; grouped.push({e: o.e, avant: o.avant, plus: 0, notes: new Set(), users: new Set(), n: 0}); }
+    const g = grouped[idx[k]];
+    g.plus += o.plus; g.n++; g.e = o.e;
+    if(o.note) g.notes.add(o.note);
+    g.users.add(o.e.user || "Inconnu");
+  });
+  out.length = 0;
+  grouped.forEach(g => out.push(g));
   out.reverse();
-  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, o.e.user || "Inconnu", o.note]);
+  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, Array.from(o.users).join(", "), Array.from(o.notes).concat(o.n > 1 ? [o.n + " ajouts"] : []).join(" · ")]);
   const total = out.reduce((a, o) => a + o.plus, 0);
   const days = new Set(rows.map(r => r[0])).size;
   return {
