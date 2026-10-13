@@ -327,7 +327,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.2 · 13 oct. 2026 · temps réel";
+const APP_VERSION = "v5.3 · 13 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -1976,22 +1976,32 @@ function fmtDay(ts){
 }
 
 // Récapitulatif des entrées de stock (variations positives) par date, avec le stock d'avant
+let entriesPeriod = "today"; // today | week | all
+function periodStart(){
+  const d = new Date();
+  if(entriesPeriod === "all") return 0;
+  d.setHours(0,0,0,0);
+  if(entriesPeriod === "week") d.setDate(d.getDate() - 6);
+  return d.getTime();
+}
 function entriesDataset(log){
   const ts = e => { const t = new Date(e.timestamp).getTime(); return isNaN(t) ? 0 : t; };
   const asc = log.slice().sort((a, b) => ts(a) - ts(b));
   const last = {};
   const out = [];
+  const since = periodStart();
   let unknown = 0;
   asc.forEach(e => {
     if(e.action === "suppression"){ delete last[e.name]; return; }
     if(e.base == null || isNaN(e.base)) return;
     const prev = last[e.name];
     const now = Number(e.base);
+    const inPeriod = ts(e) >= since;
     if(e.action === "ajout"){
-      if(now > 0) out.push({e, avant: 0, plus: now, note: "nouveau produit"});
+      if(now > 0 && inPeriod) out.push({e, avant: 0, plus: now, note: "nouveau produit"});
     } else if(prev !== undefined){
-      if(now > Number(prev)) out.push({e, avant: Number(prev), plus: now - Number(prev), note: ""});
-    } else {
+      if(now > Number(prev) && inPeriod) out.push({e, avant: Number(prev), plus: now - Number(prev), note: ""});
+    } else if(ts(e) >= since){
       unknown++;
     }
     last[e.name] = now;
@@ -2010,16 +2020,17 @@ function entriesDataset(log){
   out.length = 0;
   grouped.forEach(g => out.push(g));
   out.reverse();
-  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, Array.from(o.users).join(", "), Array.from(o.notes).concat(o.n > 1 ? [o.n + " ajouts"] : []).join(" · ")]);
+  const rows = out.map(o => [fmtDay(o.e.timestamp), o.e.name, o.avant, "+" + o.plus, o.avant + o.plus, Array.from(o.users).join(", "), Array.from(o.notes).concat(o.n > 1 ? [o.n + " ajouts"] : []).join(" · "), ""]);
   const total = out.reduce((a, o) => a + o.plus, 0);
   const days = new Set(rows.map(r => r[0])).size;
   return {
     kind: "in",
-    title: "Entrées de stock par date",
+    title: "Contrôle de livraison — entrées de stock",
     file: "entrees-buanderie-" + todayIso(),
-    header: ["Date", "Produit", "Avant", "Entrée", "Après", "Qui", "Remarque"],
+    header: ["Date", "Produit", "Avant", "Entrée", "Après", "Qui", "Remarque", "Constaté à la livraison"],
     rows,
-    summary: rows.length ? `${rows.length} entrées sur ${days} jour(s) · ${total} unités ajoutées` + (unknown ? ` · ${unknown} produit(s) sans stock antérieur connu ignoré(s)` : "") : "Aucune entrée de stock dans l'historique",
+    total,
+    summary: rows.length ? `${rows.length} produits · ${total} unités ajoutées · ${days} jour(s)` + (unknown ? ` · ${unknown} produit(s) sans stock antérieur connu ignoré(s)` : "") : "Aucune entrée de stock sur la période",
     numCols: [2, 3, 4],
     rowState: () => ""
   };
@@ -2066,8 +2077,39 @@ function deliveryHtml(ds){
     <p style="font-family:sans-serif; font-size:11px; color:#555; margin:14px 0 0;">Écart = reçu − commandé. « Stock après » = stock actuel + commandé : à saisir dans l'appli une fois la livraison validée.</p>`;
 }
 
+function entriesHtml(ds){
+  const who = getUsername() || "—";
+  const label = {today: "aujourd'hui", week: "7 derniers jours", all: "tout l'historique"}[entriesPeriod];
+  const cell = "padding:9px 5px; border-bottom:1px solid #999;";
+  const box = '<span style="display:inline-block; width:15px; height:15px; border:1.5px solid #333; vertical-align:middle;"></span>';
+  const th = (t, a) => `<th style="text-align:${a || "left"}; border-bottom:2px solid #333; padding:6px 5px; font-size:11.5px;">${t}</th>`;
+  const showDate = new Set(ds.rows.map(r => r[0])).size > 1;
+  const body = ds.rows.map(r => `<tr style="page-break-inside:avoid;">
+      <td style="${cell} text-align:center;">${box}</td>
+      ${showDate ? `<td style="${cell} color:#555;">${esc(r[0])}</td>` : ""}
+      <td style="${cell}">${esc(r[1])}${r[6] ? `<br><span style="font-size:10.5px; color:#777;">${esc(r[6])}</span>` : ""}</td>
+      <td style="${cell} text-align:right; color:#555;">${esc(r[2])}</td>
+      <td style="${cell} text-align:right; font-weight:700;">${esc(r[3])}</td>
+      <td style="${cell} text-align:right; color:#555;">${esc(r[4])}</td>
+      <td style="${cell} border-left:1px solid #999; width:80px;"></td>
+    </tr>`).join("");
+  const line = (l) => `<div style="flex:1; min-width:170px;"><span style="font-size:11.5px;">${l}</span><div style="border-bottom:1px solid #333; height:22px;"></div></div>`;
+  return `
+    <h2 style="font-family:sans-serif; margin:0 0 4px;">Contrôle de livraison — Buanderie EAFC</h2>
+    <p style="font-family:sans-serif; font-size:12px; color:#555; margin:0 0 4px;">Entrées de stock : ${esc(label)} · exporté le ${esc(fmtDateTime(new Date()))} par ${esc(who)}</p>
+    <p style="font-family:sans-serif; font-size:13px; margin:0 0 12px;"><b>${esc(ds.summary)}</b></p>
+    <div style="font-family:sans-serif; display:flex; gap:18px; flex-wrap:wrap; margin:0 0 14px;">${line("Fournisseur")}${line("N° bon de livraison")}</div>
+    <table style="width:100%; border-collapse:collapse; font-family:sans-serif; font-size:12.5px;">
+      <thead><tr>${th("✔", "center")}${showDate ? th("Date") : ""}${th("Produit")}${th("Avant", "right")}${th("Entrée", "right")}${th("Après", "right")}${th("Constaté")}</tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot><tr><td colspan="${showDate ? 4 : 3}" style="padding:8px 5px; font-weight:700; text-align:right;">Total entré</td><td style="padding:8px 5px; font-weight:700; text-align:right;">+${ds.total}</td><td></td><td></td></tr></tfoot>
+    </table>
+    <div style="font-family:sans-serif; display:flex; gap:18px; flex-wrap:wrap; margin:22px 0 0;">${line("Contrôlé par")}${line("Signature")}</div>`;
+}
+
 function reportHtml(ds){
   if(ds.kind === "liv") return deliveryHtml(ds);
+  if(ds.kind === "in") return entriesHtml(ds);
   const who = getUsername() || "—";
   const th = ds.header.map((h, i) => `<th style="text-align:${ds.numCols.includes(i) ? "right" : "left"}; border-bottom:2px solid #333; padding:6px 5px;">${esc(h)}</th>`).join("");
   const body = ds.rows.map(r => {
@@ -2161,21 +2203,25 @@ async function runExport(kind, act){
 
 function openExportSheet(){
   const canHist = HISTORY_USERS.includes(getUsername());
-  const group = (kind, title, desc) => `
+  const group = (kind, title, desc, extra) => `
     <div class="exp-group">
       <h3>${title}</h3>
-      <div class="exp-desc">${desc}</div>
+      <div class="exp-desc">${desc}</div>${extra || ""}
       <div class="exp-actions">
         <button class="exp-btn" data-kind="${kind}" data-act="print">🖨<br>Imprimer / PDF</button>
         <button class="exp-btn" data-kind="${kind}" data-act="csv">📊<br>Tableur (.csv)</button>
         <button class="exp-btn" data-kind="${kind}" data-act="share">📤<br>Partager</button>
       </div>
     </div>`;
+  const periodSel = `<div class="exp-desc" style="margin:-4px 0 8px;">Période : <select id="entriesPeriod" style="font-size:13px; padding:3px 6px; border:1px solid var(--line); border-radius:6px;">
+      <option value="today">Aujourd'hui</option><option value="week">7 derniers jours</option><option value="all">Tout l'historique</option></select></div>`;
   const body = document.getElementById("exportBody");
   body.innerHTML =
     group("liv", "Feuille de contrôle de livraison", "Produits à commander avec cases à cocher, colonnes Reçu / Écart / Remarque et zone de signature.") +
     group("inv", "Inventaire actuel", "Produit, stock, cible, quantité à commander et état.") +
-    (canHist ? group("in", "Entrées de stock par date", "Produits rentrés (variation positive) par date, avec le stock d'avant.") + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
+    (canHist ? group("in", "Entrées de stock (vérification de livraison)", "Seulement les plus : produit, stock avant, entrée, stock après, avec cases à cocher et colonne « Constaté ». Plusieurs ajouts le même jour sont totalisés.", periodSel) + group("hist", "Historique des modifications", "Date, qui, action, produit, stock, variation (jusqu'à 1000 dernières).") : "");
+  const ps = document.getElementById("entriesPeriod");
+  if(ps){ ps.value = entriesPeriod; ps.onchange = () => { entriesPeriod = ps.value; }; }
   body.querySelectorAll("[data-act]").forEach(btn => {
     btn.onclick = async () => {
       btn.disabled = true;
