@@ -328,7 +328,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.7 · 14 oct. 2026 · temps réel";
+const APP_VERSION = "v5.8 · 14 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -785,6 +785,8 @@ async function fbSend(payload){
   if(payload.action !== "delete"){
     entry.base = Number(payload.base) || 0;
     if(payload.target !== null && payload.target !== undefined && payload.target !== "") entry.target = Number(payload.target);
+    // variation exacte (+1, +N, −1, −N) : le relevé des entrées n'a plus à la deviner
+    if(Number.isInteger(payload.delta) && payload.delta !== 0) entry.delta = payload.delta;
   }
   fetch(FB_URL + "/log.json", {method:"POST", keepalive:true, body: JSON.stringify(entry)}).catch(() => {});
 }
@@ -804,7 +806,8 @@ async function fbGetLog(limit){
         action: String(e.action || ""),
         name: String(e.name || ""),
         base: (e.base === undefined || e.base === null) ? null : Number(e.base),
-        target: (e.target === undefined || e.target === null) ? null : Number(e.target)
+        target: (e.target === undefined || e.target === null) ? null : Number(e.target),
+        delta: (e.delta === undefined || e.delta === null) ? null : Number(e.delta)
       };
     });
   }catch(e){ return null; }
@@ -1010,9 +1013,16 @@ async function sendAndVerify(payload, isStillCurrent){
   return false;
 }
 
-async function apiUpdate(name, base, target){
+async function apiUpdate(name, base, target, delta){
   if(!apiUrl) return;
   const payload = {action:"update", name, base, target, user:getUsername()};
+  if(Number.isInteger(delta) && delta !== 0){
+    payload.delta = delta;
+    // une écriture précédente restée en file (non envoyée) est remplacée : on garde sa variation
+    const waiting = writeQueue.find(q => q.name === name && q.action !== "delete");
+    if(waiting && Number.isInteger(waiting.delta)) payload.delta += waiting.delta;
+    if(payload.delta === 0) delete payload.delta;
+  }
   noteActivity(); // modification locale : on sonde plus vite pendant quelques secondes
   pendingConfirms.add(name); // protect from mergeServerData until confirmed
   // cette écriture remplace toute ancienne en attente pour ce produit
@@ -1600,7 +1610,7 @@ function render(){
       updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
-      apiUpdate(p.name, p.base, p.target);
+      apiUpdate(p.name, p.base, p.target, 1);
     });
     card.querySelector(".plusn").addEventListener("click", async () => {
       const v = await customPrompt(`Combien ajouter à "${esc(p.name)}" ?<br><small style="font-weight:400;color:#8a9497;">Stock actuel : ${p.base}</small>`, "");
@@ -1611,7 +1621,7 @@ function render(){
       updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
-      apiUpdate(p.name, p.base, p.target);
+      apiUpdate(p.name, p.base, p.target, n);
       showToast(`+${n} → stock ${p.base}`);
     });
     card.querySelector(".minusn").addEventListener("click", async () => {
@@ -1625,7 +1635,7 @@ function render(){
       updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
-      apiUpdate(p.name, p.base, p.target);
+      apiUpdate(p.name, p.base, p.target, -n);
       showToast(`−${n} → stock ${p.base}`);
     });
     card.querySelector(".minus").addEventListener("click", async () => {
@@ -1636,7 +1646,7 @@ function render(){
       updateCard(liveCard(p), p);
       saveDataDebounced();
       renderOrderBadge();
-      apiUpdate(p.name, p.base, p.target);
+      apiUpdate(p.name, p.base, p.target, -1);
     });
     card.querySelector(".restant-count").addEventListener("click", async () => {
       const v = await customPrompt(`Nouveau stock pour "${esc(p.name)}"`, p.base);
@@ -1997,7 +2007,11 @@ function entriesDataset(log){
     const prev = last[e.name];
     const now = Number(e.base);
     const inPeriod = ts(e) >= since;
-    if(e.action === "ajout"){
+    const hasDelta = e.delta != null && !isNaN(e.delta);
+    if(hasDelta){
+      // variation notée telle quelle par l'appli : exacte, sans dépendre du stock d'avant
+      if(Number(e.delta) > 0 && inPeriod) out.push({e, avant: now - Number(e.delta), plus: Number(e.delta), note: ""});
+    } else if(e.action === "ajout"){
       if(now > 0 && inPeriod && !isRename(e)) out.push({e, avant: 0, plus: now, note: "nouveau produit"});
     } else if(prev !== undefined){
       if(now > Number(prev) && inPeriod) out.push({e, avant: Number(prev), plus: now - Number(prev), note: ""});
