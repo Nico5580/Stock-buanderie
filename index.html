@@ -328,7 +328,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v5.8 · 14 oct. 2026 · temps réel";
+const APP_VERSION = "v5.9 · 14 oct. 2026 · temps réel";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -787,6 +787,7 @@ async function fbSend(payload){
     if(payload.target !== null && payload.target !== undefined && payload.target !== "") entry.target = Number(payload.target);
     // variation exacte (+1, +N, −1, −N) : le relevé des entrées n'a plus à la deviner
     if(Number.isInteger(payload.delta) && payload.delta !== 0) entry.delta = payload.delta;
+    if(payload.renamedFrom) entry.renamedFrom = String(payload.renamedFrom);
   }
   fetch(FB_URL + "/log.json", {method:"POST", keepalive:true, body: JSON.stringify(entry)}).catch(() => {});
 }
@@ -807,7 +808,8 @@ async function fbGetLog(limit){
         name: String(e.name || ""),
         base: (e.base === undefined || e.base === null) ? null : Number(e.base),
         target: (e.target === undefined || e.target === null) ? null : Number(e.target),
-        delta: (e.delta === undefined || e.delta === null) ? null : Number(e.delta)
+        delta: (e.delta === undefined || e.delta === null) ? null : Number(e.delta),
+        renamedFrom: e.renamedFrom ? String(e.renamedFrom) : null
       };
     });
   }catch(e){ return null; }
@@ -1013,9 +1015,10 @@ async function sendAndVerify(payload, isStillCurrent){
   return false;
 }
 
-async function apiUpdate(name, base, target, delta){
+async function apiUpdate(name, base, target, delta, extra){
   if(!apiUrl) return;
   const payload = {action:"update", name, base, target, user:getUsername()};
+  if(extra && extra.renamedFrom) payload.renamedFrom = String(extra.renamedFrom);
   if(Number.isInteger(delta) && delta !== 0){
     payload.delta = delta;
     // une écriture précédente restée en file (non envoyée) est remplacée : on garde sa variation
@@ -1737,7 +1740,7 @@ function openRenameModal(p){
     render();
     renderOrderBadge();
     showToast("Produit renommé");
-    apiUpdate(newName, p.base, p.target).then(() => apiDelete(oldName));
+    apiUpdate(newName, p.base, p.target, undefined, {renamedFrom: oldName}).then(() => apiDelete(oldName));
   };
 }
 
@@ -1997,10 +2000,12 @@ function entriesDataset(log){
   // Ce n'est pas une entrée de marchandise : on repère ces paires pour les ignorer.
   const tmp = {}, dels = [];
   asc.forEach(e => {
-    if(e.action === "suppression"){ if(tmp[e.name] !== undefined) dels.push({t: ts(e), user: e.user, base: tmp[e.name]}); delete tmp[e.name]; }
+    if(e.action === "suppression"){ dels.push({t: ts(e), user: e.user, base: tmp[e.name]}); delete tmp[e.name]; }
     else if(e.base != null && !isNaN(e.base)) tmp[e.name] = Number(e.base);
   });
-  const isRename = e => e.action === "ajout" && dels.some(d => d.user === e.user && d.base === Number(e.base) && Math.abs(d.t - ts(e)) <= 120000);
+  const isRename = e => e.action === "ajout" && (!!e.renamedFrom || dels.some(d => d.user === e.user && (
+    (d.base === Number(e.base) && Math.abs(d.t - ts(e)) <= 120000) ||
+    (d.base === undefined && Math.abs(d.t - ts(e)) <= 60000))));
   asc.forEach(e => {
     if(e.action === "suppression"){ delete last[e.name]; return; }
     if(e.base == null || isNaN(e.base)) return;
