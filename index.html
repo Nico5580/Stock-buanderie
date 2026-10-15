@@ -328,7 +328,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v6.0 · 15 oct. 2026 · connexion sécurisée";
+const APP_VERSION = "v6.0.1 · 15 oct. 2026 · connexion sécurisée";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -1531,7 +1531,7 @@ function openLoginModal(){
       errEl.textContent =
         /INVALID_LOGIN_CREDENTIALS|EMAIL_NOT_FOUND|INVALID_PASSWORD|INVALID_EMAIL/.test(m) ? "E-mail ou mot de passe incorrect."
         : /TOO_MANY_ATTEMPTS/.test(m) ? "Trop d'essais : réessaie dans quelques minutes."
-        : /API.?KEY/i.test(m) ? "Clé API refusée (problème de configuration)."
+        : /API.?KEY/i.test(m) ? "Clé API refusée (problème de configuration) : " + m.slice(0, 120)
         : (e instanceof TypeError) ? "Pas de réseau."
         : "Connexion impossible : " + m;
       okBtn.disabled = false; okBtn.textContent = "Se connecter";
