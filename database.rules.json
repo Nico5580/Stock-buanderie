@@ -11,14 +11,21 @@
     },
     "log": {
       ".read": "auth != null",
-      ".write": "auth != null",
       "$k": {
+        ".write": "auth != null && !data.exists()",
         ".validate": "newData.hasChildren(['user','action','name'])"
       }
     },
     "meta": {
       ".read": "auth != null",
       ".write": "auth != null"
+    },
+    "backups": {
+      ".read": "auth != null",
+      "$id": {
+        ".write": "auth != null && !data.exists()",
+        ".validate": "newData.hasChildren(['t','user','products'])"
+      }
     }
   }
 }

@@ -328,7 +328,7 @@
 <div id="printArea"></div>
 
 <script>
-const APP_VERSION = "v6.0.1 · 15 oct. 2026 · connexion sécurisée";
+const APP_VERSION = "v6.1 · 17 oct. 2026 · sauvegarde automatique";
 const STORAGE_KEY = "stock-buanderie-v1";
 const API_URL_KEY = "stock-buanderie-apiurl";
 const USER_KEY = "stock-buanderie-user";
@@ -869,7 +869,44 @@ async function fbSend(payload){
     if(payload.renamedFrom) entry.renamedFrom = String(payload.renamedFrom);
   }
   fbReq("/log.json", {method:"POST", keepalive:true, body: JSON.stringify(entry)}).catch(() => {});
+  fbScheduleBackup(entry.user);
 }
+
+// ---- Sauvegarde automatique ---------------------------------------------
+// Après une modification (les suivantes dans la minute sont regroupées), l'état
+// réel de la base est relu sur le serveur puis copié dans /backups. Les règles
+// n'autorisent que la CRÉATION d'un instantané : depuis l'appli, on ne peut ni
+// le modifier ni l'effacer. Un état identique au dernier instantané n'est pas
+// recopié. Si la page passe en arrière-plan, l'instantané part tout de suite.
+const BACKUP_DELAY_MS = 60000;
+let backupTimer = null, backupBusy = false, backupLastSig = "", backupUser = "";
+function fbScheduleBackup(user){
+  if(user) backupUser = user;
+  if(backupTimer) return;
+  backupTimer = setTimeout(fbBackupNow, BACKUP_DELAY_MS);
+}
+async function fbBackupNow(){
+  clearTimeout(backupTimer); backupTimer = null;
+  if(backupBusy){ fbScheduleBackup(); return; }
+  backupBusy = true;
+  try{
+    const g = await fbReq("/products.json?_=" + Date.now(), {cache:"no-store"});
+    if(!g.ok) return;
+    const data = await g.json();
+    if(!data || typeof data !== "object") return;
+    const sig = JSON.stringify(data);
+    if(sig === backupLastSig) return;
+    const res = await fbReq("/backups.json", {method:"POST", keepalive:true, body: JSON.stringify({
+      t: {".sv": "timestamp"},
+      user: backupUser || "Inconnu",
+      n: Object.keys(data).length,
+      products: data
+    })});
+    if(res.ok) backupLastSig = sig;
+  }catch(e){ /* non bloquant : réessayé à la prochaine modification */ }
+  finally{ backupBusy = false; }
+}
+document.addEventListener("visibilitychange", () => { if(document.hidden && backupTimer) fbBackupNow(); });
 
 async function fbGetLog(limit){
   try{
